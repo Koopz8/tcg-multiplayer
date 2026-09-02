@@ -17,6 +17,7 @@ namespace TcgMultiplayer.Ui
 
         private readonly Session _s;
         private readonly AvatarDirector _av;
+        private readonly MachineDirector _mc;
         private Rect _rect = new Rect(24, 24, 460, 430);
         private Vector2 _scroll;
         private string _chatDraft = "";
@@ -28,7 +29,7 @@ namespace TcgMultiplayer.Ui
 
         public bool Visible;
 
-        public Overlay(Session s, AvatarDirector av) { _s = s; _av = av; }
+        public Overlay(Session s, AvatarDirector av, MachineDirector mc) { _s = s; _av = av; _mc = mc; }
 
         public void Draw()
         {
@@ -129,6 +130,35 @@ namespace TcgMultiplayer.Ui
             GUILayout.EndHorizontal();
             GUILayout.Label("Mirror replays your own movement through the real wire format, so the "
                           + "avatar path can be tested without a second copy of the game.", _dim);
+
+            // ---- machines -------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Machines (" + _mc.MachineCount + ")", _head);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Rescan", GUILayout.Width(64), GUILayout.Height(20))) _mc.RebuildNow();
+            GUILayout.EndHorizontal();
+
+            if (_mc.MachineCount == 0)
+            {
+                GUILayout.Label("None found yet — machines are registered a few seconds after a scene loads.", _dim);
+            }
+            else
+            {
+                int shown = 0;
+                foreach (var m in _mc.Machines)
+                {
+                    if (m.Owner == 0) continue;      // only list what's occupied
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label(m.Label, _mono, GUILayout.Width(200));
+                    GUILayout.Label(m.OwnedByMe ? "yours" : ("in use by " + (m.OwnerName ?? "?")), _dim);
+                    GUILayout.EndHorizontal();
+                    if (++shown >= 6) break;
+                }
+                if (shown == 0) GUILayout.Label("All free.", _dim);
+                GUILayout.Label("mirrored events: " + _mc.MirroredEventsSent + " sent, "
+                              + _mc.MirroredEventsApplied + " applied", _dim);
+            }
 
             // ---- log ------------------------------------------------------
             GUILayout.Space(6);

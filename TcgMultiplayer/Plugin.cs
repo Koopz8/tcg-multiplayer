@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.1.0";
+        public const string Version = "0.3.0";
 
         private static Plugin _instance;
 
@@ -25,6 +25,7 @@ namespace TcgMultiplayer
         private static MelonPreferences_Entry<float> _pSendRate;
         private static MelonPreferences_Entry<float> _pInterpDelay;
         private static MelonPreferences_Entry<float> _pMirrorDelay;
+        private static MelonPreferences_Entry<float> _pAnimSpeedScale;
 
         public static int MaxPlayers { get { return _pMaxPlayers != null ? Mathf.Clamp(_pMaxPlayers.Value, 2, 8) : 4; } }
         public static string ToggleKeyName { get { return _pToggleKey != null ? _pToggleKey.Value : "F9"; } }
@@ -32,6 +33,8 @@ namespace TcgMultiplayer
         private Session _session;
         private Overlay _overlay;
         private AvatarDirector _avatars;
+        private MachineDirector _machines;
+        private HarmonyLib.Harmony _harmony;
         private bool _initTried;
         private float _nextInitTry;
         private bool _handledLaunchLobby;
@@ -56,12 +59,22 @@ namespace TcgMultiplayer
             _pMirrorDelay = cat.CreateEntry("MirrorDelaySeconds", 1.5f, "Mirror delay (s)",
                 "Solo test mode: how far behind you the mirrored ghost walks.");
 
+            _pAnimSpeedScale = cat.CreateEntry("AnimatorSpeedScale", 1f, "Animator speed scale",
+                "Multiplies the value fed to the walk/run blend. Raise it if remote bodies "
+                + "glide with their legs barely moving, lower it if they sprint on the spot.");
+
             _session = new Session();
             _avatars = new AvatarDirector(_session);
             _avatars.SendRate = _pSendRate.Value;
             _avatars.MirrorDelay = _pMirrorDelay.Value;
             RemoteAvatar.InterpDelay = Mathf.Clamp(_pInterpDelay.Value, 0.02f, 1f);
-            _overlay = new Overlay(_session, _avatars) { Visible = _pOpenOnStart.Value };
+            RemoteAvatar.SpeedScale = Mathf.Clamp(_pAnimSpeedScale.Value, 0.05f, 20f);
+            _machines = new MachineDirector(_session);
+            _overlay = new Overlay(_session, _avatars, _machines) { Visible = _pOpenOnStart.Value };
+
+            _harmony = new HarmonyLib.Harmony("com.mason.tcgmultiplayer");
+            try { _machines.ApplyPatches(_harmony); }
+            catch (Exception ex) { Warn("Harmony patching failed: " + ex); }
 
             Log("Loaded. " + ToggleKeyName + " toggles the overlay.");
         }
@@ -86,6 +99,7 @@ namespace TcgMultiplayer
             if (_overlay.Visible) FreeCursor();
             _session.Tick();
             _avatars.Tick();
+            _machines.Tick();
         }
 
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)
@@ -93,6 +107,7 @@ namespace TcgMultiplayer
             // Scenes load additively and PLAYER is rebuilt, so every cached
             // transform and every cloned body is stale from here.
             _avatars.OnSceneChanged();
+            _machines.OnSceneChanged();
         }
 
         public override void OnGUI()

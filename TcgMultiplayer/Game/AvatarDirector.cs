@@ -130,7 +130,7 @@ namespace TcgMultiplayer.Game
                 _avatars[key] = av;
             }
             av.Label = label;
-            av.Push(st.Pos, st.Yaw, st.Pitch, st.Speed, st.Flags);
+            av.Push(st);
         }
 
         private void Despawn(ulong key)

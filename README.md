@@ -56,9 +56,37 @@ Mirror does not cover is Steam moving the bytes, and M1 already exercises that A
 Slide the delay down to 0.25 s to check interpolation smoothness; push it to 5 s to
 watch a long path replay.
 
+### M3 — machine occupancy and spectating
+
+**Ownership.** The host is authoritative. When your card goes into a machine, the
+mod asks the host to grant it; everyone else gets the game's own `FREEZE MACHINE`
+event on that cabinet, so it visibly refuses their card. Two players grabbing the
+same machine in the same instant cannot both win. If someone disconnects mid-round
+their machines are released rather than left locked.
+
+Occupancy is read off the game's own lifecycle states — `Card Inserted`,
+`Turn On MECH`, `Ready To Play` to claim; `Card Removed`, `Button Exit Machine`,
+`Send Explore Mode Event`, `Off of Ride and Done` to release — so it works however
+the player got there.
+
+**Spectating.** The machine's owner mirrors every non-system FSM event fired inside
+that machine's subtree, and spectators replay them on their own copy of the same
+FSMs. Events rather than states, because a PlayMaker graph fed the same events walks
+the same path, and because the M0 trace showed a whole round is a couple of dozen
+events, not a stream. Sent reliably and ordered — a dropped machine event desyncs
+the cabinet for the rest of the round, unlike a dropped position snapshot.
+
+Known limit: a graph that rolls dice locally (`ActionRandomPrizeSelection`) can
+diverge. That's where per-machine adapters eventually earn their keep. The overlay
+shows sent/applied counts so drift is visible.
+
+One adapter covers all 72 interactables — cabinets, rides, booths, vending
+machines, lotto menus and the four vehicles.
+
 ### Still not synced
 
-No machines, no economy, no ownership. That's M3 and M4.
+The shared wallet (M4), and machine physics — the claw arm, the puck, the coins
+themselves (M5).
 
 ### Settings
 
@@ -73,6 +101,7 @@ No machines, no economy, no ownership. That's M3 and M4.
 | `SnapshotHz` | `15` | How often local position is sent. Plenty for walking speed. |
 | `InterpolationDelaySeconds` | `0.12` | How far in the past remote bodies render. |
 | `MirrorDelaySeconds` | `1.5` | Mirror mode ghost delay. |
+| `AnimatorSpeedScale` | `1.0` | Multiplies what's fed to the walk/run blend. Raise it if remote bodies glide with barely-moving legs; lower it if they sprint on the spot. |
 
 ### Design notes
 
@@ -106,6 +135,16 @@ Read by reflection, with a transform-delta fallback for speed.
 **Avatars are positioned from the mesh, not the player root.** `LARRY Mesh` sits at
 a local offset inside `PLAYER`; driving the clone from the root's position plants
 it at the wrong height.
+
+**Locomotion is a 2D blend, so velocity crosses the wire in the body's frame.**
+Larry's animator exposes `Walk`, `Turn`, `MoveSpeedX`, `MoveSpeedY`, `Run`,
+`Crouch` plus a pile of action parameters (`Insert Card HIGH/MID/LOW`, `IsDriving`,
+`IsSitting`, `IsBiking`, `RaiseBat Bool`, …). `MoveSpeedX` is **strafe** and
+`MoveSpeedY` is **forward** — a name-matching heuristic picked `MoveSpeedX` first
+and fed forward speed into the strafe axis, which makes the body sidle instead of
+walk. The rig is now bound by an explicit table; the heuristic only survives as a
+fallback for a rig we haven't seen. The snapshot carries `velX`, `velZ` (local
+frame) and a smoothed `turn` rate rather than one scalar speed.
 
 ---
 

@@ -43,6 +43,12 @@ namespace TcgMultiplayer.Net
         public Action<CSteamID, Game.PlayerState, ushort> OnPlayerState;
         /// <summary>Raised when a peer leaves, so their body can be removed.</summary>
         public Action<CSteamID> OnPeerGone;
+        /// <summary>Host only: someone wants (or is releasing) a machine.</summary>
+        public Action<CSteamID, uint, bool> OnMachineClaim;
+        /// <summary>The host's ruling on who owns a machine. 0 = free.</summary>
+        public Action<uint, ulong, string> OnMachineOwner;
+        /// <summary>An FSM event the machine's owner wants spectators to replay.</summary>
+        public Action<CSteamID, uint, uint, string> OnMachineEvent;
 
         private Callback<LobbyEnter_t> _cbLobbyEnter;
         private Callback<LobbyChatUpdate_t> _cbLobbyChat;
@@ -160,7 +166,8 @@ namespace TcgMultiplayer.Net
         {
             w.U16(seq)
              .F32(st.Pos.x).F32(st.Pos.y).F32(st.Pos.z)
-             .F32(st.Yaw).F32(st.Pitch).F32(st.Speed)
+             .F32(st.Yaw).F32(st.Pitch)
+             .F32(st.VelX).F32(st.VelZ).F32(st.Turn)
              .U8(st.Flags);
         }
 
@@ -171,9 +178,54 @@ namespace TcgMultiplayer.Net
             st.Pos = new UnityEngine.Vector3(r.F32(), r.F32(), r.F32());
             st.Yaw = r.F32();
             st.Pitch = r.F32();
-            st.Speed = r.F32();
+            st.VelX = r.F32();
+            st.VelZ = r.F32();
+            st.Turn = r.F32();
             st.Flags = r.U8();
             return st;
+        }
+
+        // --------------------------------------------------- machine ownership
+
+        public void SendMachineClaim(uint machineId, bool release = false)
+        {
+            var host = HostPeer();
+            if (host == null) return;
+            SendOn(host, Op.MachineClaim, SteamTransport.ChannelControl, true,
+                   w => w.U32(machineId).Bool(release));
+        }
+
+        public void SendMachineOwner(uint machineId, ulong owner, string ownerName, CSteamID? onlyTo = null)
+        {
+            if (State != SessionState.InLobby) return;
+            foreach (var p in Peers)
+            {
+                if (onlyTo.HasValue && p.Id != onlyTo.Value) continue;
+                SendOn(p, Op.MachineOwner, SteamTransport.ChannelControl, true,
+                       w => w.U32(machineId).U64(owner).Str(ownerName ?? ""));
+            }
+        }
+
+        public void SendMachineEvent(uint machineId, uint fsmId, string evt)
+        {
+            if (State != SessionState.InLobby) return;
+            using (var w = new PacketWriter(Op.MachineEvent))
+            {
+                w.U32(machineId).U32(fsmId).Str(evt);
+                var bytes = w.ToArray();
+                // Reliable and ordered: a dropped machine event desyncs the cabinet
+                // for the rest of the round, unlike a dropped position snapshot.
+                foreach (var p in Peers)
+                    SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
+            }
+        }
+
+        private Peer HostPeer()
+        {
+            if (!Lobby.IsValid()) return null;
+            var owner = SteamMatchmaking.GetLobbyOwner(Lobby);
+            for (int i = 0; i < Peers.Count; i++) if (Peers[i].Id == owner) return Peers[i];
+            return null;
         }
 
         // ---------------------------------------------------------------- pump
@@ -346,6 +398,32 @@ namespace TcgMultiplayer.Net
                             if (!Newer(seq, peer.LastStateSeq)) break;
                             peer.LastStateSeq = seq;
                             if (OnPlayerState != null) OnPlayerState(peer.Id, st, seq);
+                            break;
+                        }
+
+                        case Op.MachineClaim:
+                        {
+                            uint mid = pr.U32();
+                            bool rel = pr.Bool();
+                            if (OnMachineClaim != null) OnMachineClaim(peer.Id, mid, rel);
+                            break;
+                        }
+
+                        case Op.MachineOwner:
+                        {
+                            uint mid = pr.U32();
+                            ulong owner = pr.U64();
+                            string oname = pr.Str();
+                            if (OnMachineOwner != null) OnMachineOwner(mid, owner, oname);
+                            break;
+                        }
+
+                        case Op.MachineEvent:
+                        {
+                            uint mid = pr.U32();
+                            uint fid = pr.U32();
+                            string evt = pr.Str();
+                            if (OnMachineEvent != null) OnMachineEvent(peer.Id, mid, fid, evt);
                             break;
                         }
 
