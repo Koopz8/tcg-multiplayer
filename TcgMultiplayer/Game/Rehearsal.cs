@@ -1,0 +1,145 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace TcgMultiplayer.Game
+{
+    /// <summary>
+    /// Solo verification for the parts of the mod that normally need two people.
+    ///
+    /// Machine ownership, spectating and the wallet guard all only fire when
+    /// someone *else* is playing — which, with one copy of the game, is never. So
+    /// Rehearsal records the FSM events of a round you play yourself, hands the
+    /// machine to a fake peer, and replays the recording through the real
+    /// spectator path at the real timings.
+    ///
+    /// What that actually exercises: the machine registry resolved the right
+    /// FSMs, event replay drives the cabinet, and the wallet guard holds your
+    /// balance still while someone else's round plays out. If your coins move
+    /// during a rehearsal, the guard is broken — and you can see that alone, in
+    /// about a minute, instead of discovering it with a friend three milestones
+    /// later.
+    /// </summary>
+    internal sealed class Rehearsal
+    {
+        private struct Beat
+        {
+            public float T;        // seconds since recording started
+            public uint FsmId;
+            public string Event;
+        }
+
+        public const ulong FakePeerId = 2UL;      // not a valid SteamID
+        public const string FakePeerName = "Rehearsal";
+
+        private readonly List<Beat> _tape = new List<Beat>(256);
+        private float _recordStart;
+        private uint _recordedMachine;
+        private string _recordedLabel = "";
+
+        // playback
+        private bool _playing;
+        private int _cursor;
+        private float _playStart;
+        private ulong _savedOwner;
+        private string _savedOwnerName;
+        private bool _savedOwnedByMe;
+
+        public bool Recording { get; private set; }
+        public bool Playing { get { return _playing; } }
+        public int TapeLength { get { return _tape.Count; } }
+        public string RecordedLabel { get { return _recordedLabel; } }
+        public int WalletMovedDuringPlayback { get; private set; }
+
+        public bool HasTape { get { return _tape.Count > 0 && _recordedMachine != 0; } }
+
+        // ------------------------------------------------------------ recording
+
+        public void StartRecording(uint machineId, string label)
+        {
+            _tape.Clear();
+            _recordedMachine = machineId;
+            _recordedLabel = label ?? "";
+            _recordStart = Time.time;
+            Recording = true;
+            Plugin.Log("Rehearsal: recording " + _recordedLabel);
+        }
+
+        public void StopRecording()
+        {
+            if (!Recording) return;
+            Recording = false;
+            Plugin.Log("Rehearsal: recorded " + _tape.Count + " events from " + _recordedLabel);
+        }
+
+        public void Note(uint machineId, uint fsmId, string evt)
+        {
+            if (!Recording || machineId != _recordedMachine) return;
+            if (_tape.Count >= 2048) return;                 // a round is dozens, not thousands
+            _tape.Add(new Beat { T = Time.time - _recordStart, FsmId = fsmId, Event = evt });
+        }
+
+        // ------------------------------------------------------------- playback
+
+        /// <summary>
+        /// Hands the machine to a fake peer for the duration, so the replay takes
+        /// the genuine spectator branch rather than a special case.
+        /// </summary>
+        public bool Play(Machine m)
+        {
+            if (_playing || !HasTape || m == null || m.Id != _recordedMachine) return false;
+
+            _savedOwner = m.Owner;
+            _savedOwnerName = m.OwnerName;
+            _savedOwnedByMe = m.OwnedByMe;
+
+            m.Owner = FakePeerId;
+            m.OwnerName = FakePeerName;
+            m.OwnedByMe = false;
+
+            _playing = true;
+            _cursor = 0;
+            _playStart = Time.time;
+            WalletMovedDuringPlayback = 0;
+            Plugin.Log("Rehearsal: replaying " + _tape.Count + " events on " + _recordedLabel + " as " + FakePeerName);
+            return true;
+        }
+
+        public void Stop(Machine m)
+        {
+            if (!_playing) return;
+            _playing = false;
+            if (m != null)
+            {
+                m.Owner = _savedOwner;
+                m.OwnerName = _savedOwnerName;
+                m.OwnedByMe = _savedOwnedByMe;
+            }
+            Plugin.Log("Rehearsal: done. Wallet moved " + WalletMovedDuringPlayback
+                       + " time(s) during playback" + (WalletMovedDuringPlayback == 0
+                            ? " — guard held." : " — GUARD LEAKED."));
+        }
+
+        /// <summary>Feeds due events back through the caller's real spectator handler.</summary>
+        public void Tick(Machine m, Action<uint, uint, string> applyAsRemote, Func<int> walletRestores)
+        {
+            if (!_playing) return;
+            if (m == null) { _playing = false; return; }
+
+            int before = walletRestores();
+            float now = Time.time - _playStart;
+
+            while (_cursor < _tape.Count && _tape[_cursor].T <= now)
+            {
+                var b = _tape[_cursor++];
+                applyAsRemote(m.Id, b.FsmId, b.Event);
+            }
+
+            WalletMovedDuringPlayback += Mathf.Max(0, walletRestores() - before);
+
+            if (_cursor >= _tape.Count) Stop(m);
+        }
+
+        public uint RecordedMachine { get { return _recordedMachine; } }
+    }
+}

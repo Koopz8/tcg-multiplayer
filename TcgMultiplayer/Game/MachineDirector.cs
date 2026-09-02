@@ -37,6 +37,7 @@ namespace TcgMultiplayer.Game
         private readonly Session _session;
         private readonly MachineRegistry _registry = new MachineRegistry();
         public readonly WalletGuard Wallet = new WalletGuard();
+        public readonly Rehearsal Rehearse = new Rehearsal();
 
         // Set while we're replaying a mirrored event, so it isn't re-broadcast.
         private static bool _applying;
@@ -49,6 +50,7 @@ namespace TcgMultiplayer.Game
         private int _lastFsmListCount = -1;
 
         public int MachineCount { get { return _registry.Count; } }
+        public bool TryGetMachine(uint id, out Machine m) { return _registry.TryGet(id, out m); }
         public IEnumerable<Machine> Machines { get { return _registry.All; } }
         public bool Enabled = true;
         public int MirroredEventsSent, MirroredEventsApplied;
@@ -167,6 +169,14 @@ namespace TcgMultiplayer.Game
                     _lastFsmListCount = n;
                     _registry.Rebuild();
                 }
+            }
+
+            if (Rehearse.Playing)
+            {
+                Machine rm;
+                if (_registry.TryGet(Rehearse.RecordedMachine, out rm))
+                    Rehearse.Tick(rm, ApplyAsRemote, () => Wallet.RestoreCount);
+                else Rehearse.Stop(null);
             }
 
             // Scoreboard only — nothing authoritative rides on these numbers, so
@@ -348,18 +358,35 @@ namespace TcgMultiplayer.Game
 
                 // Only the machine's owner narrates it.
                 if (!m.OwnedByMe) return;
-                if (live._session.State != SessionState.InLobby || live._session.Peers.Count == 0) return;
 
                 var name = fsmEvent.Name;
                 if (string.IsNullOrEmpty(name)) return;
 
-                live._session.SendMachineEvent(m.Id, live._registry.IdOf(owner), name);
+                var fsmId = live._registry.IdOf(owner);
+
+                // Recording works offline — that's the point of Rehearsal.
+                live.Rehearse.Note(m.Id, fsmId, name);
+
+                if (live._session.State != SessionState.InLobby || live._session.Peers.Count == 0) return;
+                live._session.SendMachineEvent(m.Id, fsmId, name);
                 live.MirroredEventsSent++;
             }
             catch { /* never let a hook take down the frame */ }
         }
 
+        /// <summary>The genuine spectator path, reachable by Rehearsal so a solo
+        /// test exercises the same code a real peer would.</summary>
+        public void ApplyAsRemote(uint machineId, uint fsmId, string evt)
+        {
+            ApplyMirrored(machineId, fsmId, evt);
+        }
+
         private void OnMirroredEvent(CSteamID from, uint machineId, uint fsmId, string evt)
+        {
+            ApplyMirrored(machineId, fsmId, evt);
+        }
+
+        private void ApplyMirrored(uint machineId, uint fsmId, string evt)
         {
             Machine m;
             if (!_registry.TryGet(machineId, out m)) return;
@@ -394,6 +421,20 @@ namespace TcgMultiplayer.Game
             if (id == _session.SelfId) return _session.SelfName;
             foreach (var p in _session.Peers) if (p.Id == id) return p.Name;
             return id.m_SteamID.ToString();
+        }
+
+        /// <summary>Solo test: pretend a friend just took this machine.</summary>
+        public void SimulateRemoteClaim(Machine m)
+        {
+            if (m == null) return;
+            Grant(m, Rehearsal.FakePeerId, Rehearsal.FakePeerName);
+        }
+
+        /// <summary>Solo test: give it back.</summary>
+        public void SimulateRemoteRelease(Machine m)
+        {
+            if (m == null) return;
+            Grant(m, 0, null);
         }
 
         /// <summary>Nearest machine to a point, for the overlay's manual claim buttons.</summary>
