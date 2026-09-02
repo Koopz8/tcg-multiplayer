@@ -20,7 +20,9 @@ namespace TcgMultiplayer.Game
             public Vector3 Pos;
             public float Yaw;
             public float Pitch;
-            public float Speed;
+            public float VelX;
+            public float VelZ;
+            public float Turn;
             public byte Flags;
         }
 
@@ -38,6 +40,8 @@ namespace TcgMultiplayer.Game
         private bool _warnedNoBinding;
 
         public static float InterpDelay = 0.12f;
+        /// <summary>Scales what we feed the locomotion blend, in case its units aren't m/s.</summary>
+        public static float SpeedScale = 1f;
 
         public bool Spawn(Transform sourceMesh, string label)
         {
@@ -63,10 +67,14 @@ namespace TcgMultiplayer.Game
             _snaps.Clear();
         }
 
-        public void Push(Vector3 pos, float yaw, float pitch, float speed, byte flags)
+        public void Push(PlayerState st)
         {
             _lastRecv = Time.time;
-            _snaps.Add(new Snap { T = _lastRecv, Pos = pos, Yaw = yaw, Pitch = pitch, Speed = speed, Flags = flags });
+            _snaps.Add(new Snap
+            {
+                T = _lastRecv, Pos = st.Pos, Yaw = st.Yaw, Pitch = st.Pitch,
+                VelX = st.VelX, VelZ = st.VelZ, Turn = st.Turn, Flags = st.Flags
+            });
 
             // Keep a second of history; anything older can never be rendered.
             while (_snaps.Count > 2 && _snaps[0].T < _lastRecv - 1.0f) _snaps.RemoveAt(0);
@@ -107,7 +115,9 @@ namespace TcgMultiplayer.Game
         {
             var pos = Vector3.Lerp(a.Pos, b.Pos, t);
             float yaw = Mathf.LerpAngle(a.Yaw, b.Yaw, t);
-            float speed = Mathf.Lerp(a.Speed, b.Speed, t);
+            float velX = Mathf.Lerp(a.VelX, b.VelX, t) * SpeedScale;
+            float velZ = Mathf.Lerp(a.VelZ, b.VelZ, t) * SpeedScale;
+            float turn = Mathf.Lerp(a.Turn, b.Turn, t);
 
             _tf.position = pos;
             _tf.rotation = Quaternion.Euler(0f, yaw, 0f);
@@ -127,9 +137,13 @@ namespace TcgMultiplayer.Game
             {
                 bool grounded = (b.Flags & 1) != 0;
                 bool running = (b.Flags & 2) != 0;
+                float planar = Mathf.Sqrt(velX * velX + velZ * velZ);
 
-                if (_bind.SpeedParam != null) _animator.SetFloat(_bind.SpeedParam, speed);
-                if (_bind.WalkParam != null) _animator.SetBool(_bind.WalkParam, speed > 0.15f);
+                // The rig blends locomotion in 2D: strafe on X, forward on Y.
+                if (_bind.StrafeParam != null) _animator.SetFloat(_bind.StrafeParam, velX);
+                if (_bind.ForwardParam != null) _animator.SetFloat(_bind.ForwardParam, velZ);
+                if (_bind.WalkParam != null) _animator.SetFloat(_bind.WalkParam, planar);
+                if (_bind.TurnParam != null) _animator.SetFloat(_bind.TurnParam, turn);
                 if (_bind.RunParam != null) _animator.SetBool(_bind.RunParam, running);
                 if (_bind.GroundedParam != null) _animator.SetBool(_bind.GroundedParam, grounded);
             }

@@ -33,7 +33,9 @@ namespace TcgMultiplayer.Game
 
         private Vector3 _lastPos;
         private float _lastPosTime;
-        private float _fallbackSpeed;
+        private Vector3 _fallbackVel;
+        private float _lastYaw;
+        private float _turnRate;
 
         public bool Acquire()
         {
@@ -53,8 +55,9 @@ namespace TcgMultiplayer.Game
             }
 
             ProbeController();
-            _lastPos = Root.position;
+            _lastPos = Mesh.position;
             _lastPosTime = Time.time;
+            _lastYaw = Mesh.eulerAngles.y;
             Plugin.Log("Player rig acquired" + (_controller != null ? " (with movement controller)" : " (transform only)"));
             return true;
         }
@@ -105,38 +108,55 @@ namespace TcgMultiplayer.Game
             s.Yaw = Mesh.eulerAngles.y;
             s.Pitch = Cam != null ? NormalisePitch(Cam.localEulerAngles.x) : 0f;
 
-            float speed;
+            // The rig's locomotion is a 2D blend (MoveSpeedX strafe, MoveSpeedY
+            // forward), so a single scalar speed is not enough — velocity has to
+            // cross the wire in the body's own frame.
+            Vector3 world;
             if (_controller != null && _pVelocity != null)
             {
-                try
-                {
-                    var v = (Vector3)_pVelocity.GetValue(_controller, null);
-                    speed = new Vector2(v.x, v.z).magnitude;
-                }
-                catch { speed = FallbackSpeed(); }
+                try { world = (Vector3)_pVelocity.GetValue(_controller, null); }
+                catch { world = FallbackVelocity(); }
             }
-            else speed = FallbackSpeed();
+            else world = FallbackVelocity();
 
-            s.Speed = speed;
+            var local = Mesh.InverseTransformDirection(new Vector3(world.x, 0f, world.z));
+            s.VelX = local.x;
+            s.VelZ = local.z;
+            s.Turn = TurnRate(s.Yaw);
+
             s.Grounded = ReadBool(_pGrounded, true);
             s.Running = ReadBool(_pRunning, false);
             s.Jumping = ReadBool(_pJumping, false);
             return s;
         }
 
-        private float FallbackSpeed()
+        private Vector3 FallbackVelocity()
         {
             var now = Time.time;
             var dt = now - _lastPosTime;
             if (dt > 0.01f)
             {
-                var d = Root.position - _lastPos;
+                var d = Mesh.position - _lastPos;
                 d.y = 0f;
-                _fallbackSpeed = d.magnitude / dt;
-                _lastPos = Root.position;
+                _fallbackVel = d / dt;
+                _lastPos = Mesh.position;
                 _lastPosTime = now;
             }
-            return _fallbackSpeed;
+            return _fallbackVel;
+        }
+
+        private float TurnRate(float yaw)
+        {
+            var dt = Time.deltaTime;
+            if (dt > 0.0001f)
+            {
+                var delta = Mathf.DeltaAngle(_lastYaw, yaw);
+                // Heavily smoothed: mouse-look yaw is noisy frame to frame, and the
+                // Turn parameter only needs the general direction of the lean.
+                _turnRate = Mathf.Lerp(_turnRate, delta / dt, 0.25f);
+            }
+            _lastYaw = yaw;
+            return _turnRate;
         }
 
         private bool ReadBool(PropertyInfo p, bool fallback)
@@ -157,10 +177,14 @@ namespace TcgMultiplayer.Game
         public Vector3 Pos;
         public float Yaw;
         public float Pitch;
-        public float Speed;
+        public float VelX;     // strafe, in the body's own frame
+        public float VelZ;     // forward
+        public float Turn;     // yaw rate, deg/s
         public bool Grounded;
         public bool Running;
         public bool Jumping;
+
+        public float Speed { get { return Mathf.Sqrt(VelX * VelX + VelZ * VelZ); } }
 
         public byte Flags
         {

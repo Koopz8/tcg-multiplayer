@@ -113,34 +113,60 @@ namespace TcgMultiplayer.Game
         }
 
         /// <summary>
-        /// Picks the animator parameters that look like "how fast am I moving" and
-        /// "am I on the ground", by name, from whatever the rig actually has.
+        /// Maps our replicated state onto the rig's animator parameters.
+        ///
+        /// The first run dumped Larry's real parameter list:
+        ///   Walk:Float, Turn:Float, MoveSpeedX:Float, MoveSpeedY:Float,
+        ///   Run:Bool, Crouch:Bool, Watch Pressed:Trigger, Watch:Bool,
+        ///   Insert Card HIGH/MID/LOW:Bool, ShootGunPressed:Trigger,
+        ///   Reload LeftHand:Trigger, RaiseGun/RaiseBat Bool:Bool,
+        ///   SwingBatOnce:Trigger, DrinkSodaBool:Bool, EatFoodBool:Bool,
+        ///   IsSitting:Bool, IsDriving:Bool, IsDrivingLeftHand:Bool, IsBiking:Bool
+        ///
+        /// Locomotion is a 2D blend: MoveSpeedX is STRAFE and MoveSpeedY is
+        /// FORWARD. The earlier name heuristic matched "MoveSpeedX" first and fed
+        /// forward speed into the strafe axis, which makes the body sidle instead
+        /// of walk — so this rig is now bound by an explicit table, and the
+        /// heuristic only survives as a fallback for a rig we haven't seen.
         /// </summary>
         public static AnimatorBinding BindAnimator(Animator a)
         {
             var b = new AnimatorBinding();
             if (a == null) return b;
 
+            var present = new HashSet<string>();
+            try { foreach (var p in a.parameters) present.Add(p.name); }
+            catch { return b; }
+
+            // Known rig, bound by name.
+            if (present.Contains("MoveSpeedX") && present.Contains("MoveSpeedY"))
+            {
+                b.StrafeParam = "MoveSpeedX";
+                b.ForwardParam = "MoveSpeedY";
+                if (present.Contains("Walk")) b.WalkParam = "Walk";
+                if (present.Contains("Turn")) b.TurnParam = "Turn";
+                if (present.Contains("Run")) b.RunParam = "Run";
+                b.Known = true;
+                return b;
+            }
+
+            // Unknown rig: guess, and say so.
             try
             {
                 foreach (var p in a.parameters)
                 {
                     var n = p.name.ToLowerInvariant();
-                    if (p.type == AnimatorControllerParameterType.Float && b.SpeedParam == null &&
-                        (n.Contains("speed") || n.Contains("forward") || n.Contains("velocity") || n.Contains("move")))
-                        b.SpeedParam = p.name;
-
-                    if (p.type == AnimatorControllerParameterType.Bool && b.GroundedParam == null &&
-                        (n.Contains("ground") || n.Contains("air")))
-                        b.GroundedParam = p.name;
+                    if (p.type == AnimatorControllerParameterType.Float && b.WalkParam == null &&
+                        (n.Contains("speed") || n.Contains("forward") || n.Contains("velocity") || n.Contains("walk")))
+                        b.WalkParam = p.name;
 
                     if (p.type == AnimatorControllerParameterType.Bool && b.RunParam == null &&
                         (n.Contains("run") || n.Contains("sprint")))
                         b.RunParam = p.name;
 
-                    if (p.type == AnimatorControllerParameterType.Bool && b.WalkParam == null &&
-                        n.Contains("walk"))
-                        b.WalkParam = p.name;
+                    if (p.type == AnimatorControllerParameterType.Bool && b.GroundedParam == null &&
+                        (n.Contains("ground") || n.Contains("air")))
+                        b.GroundedParam = p.name;
                 }
             }
             catch { }
@@ -151,21 +177,30 @@ namespace TcgMultiplayer.Game
 
     internal sealed class AnimatorBinding
     {
-        public string SpeedParam;
-        public string GroundedParam;
-        public string RunParam;
-        public string WalkParam;
+        public bool Known;            // true when matched against the known Larry rig
+        public string ForwardParam;   // float, local +Z
+        public string StrafeParam;    // float, local +X
+        public string WalkParam;      // float, planar speed magnitude
+        public string TurnParam;      // float, deg/s
+        public string RunParam;       // bool
+        public string GroundedParam;  // bool
 
-        public bool Any { get { return SpeedParam != null || WalkParam != null || RunParam != null; } }
+        public bool Any
+        {
+            get { return ForwardParam != null || WalkParam != null || RunParam != null; }
+        }
 
         public override string ToString()
         {
             var parts = new List<string>();
-            if (SpeedParam != null) parts.Add("speed=" + SpeedParam);
+            if (ForwardParam != null) parts.Add("forward=" + ForwardParam);
+            if (StrafeParam != null) parts.Add("strafe=" + StrafeParam);
             if (WalkParam != null) parts.Add("walk=" + WalkParam);
+            if (TurnParam != null) parts.Add("turn=" + TurnParam);
             if (RunParam != null) parts.Add("run=" + RunParam);
             if (GroundedParam != null) parts.Add("grounded=" + GroundedParam);
-            return parts.Count == 0 ? "no usable parameters" : string.Join(", ", parts.ToArray());
+            if (parts.Count == 0) return "no usable parameters";
+            return (Known ? "known rig: " : "guessed: ") + string.Join(", ", parts.ToArray());
         }
     }
 }
