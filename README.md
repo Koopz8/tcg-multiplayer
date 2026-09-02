@@ -5,7 +5,7 @@ Multiplayer for **The Coin Game** (Steam app 598980). Two MelonLoader mods:
 | Mod | Purpose |
 |-----|---------|
 | **TcgFsmDump** | M0 — dumps every PlayMaker FSM graph to JSON and traces which events fire while you play. A research tool; keep it around. |
-| **TcgMultiplayer** | The mod itself. M1: Steam lobby, peer transport, handshake, ping and chat. |
+| **TcgMultiplayer** | The mod itself. M1: Steam lobby and peer transport. M2: remote player avatars, plus a Mirror mode that makes them testable with one copy of the game. |
 
 Target: Unity **2022.3.62f3**, Mono x64, game build `22761496`.
 Loader: **MelonLoader 0.6.6** (HarmonyX 2.10.2).
@@ -30,18 +30,35 @@ The panel shows each peer's name, handshake state, **round-trip time in ms**, an
 the raw Steam connection state. The chat box is there to prove bytes move both
 ways — type, hit Enter, watch it land on the other machine.
 
-### What it does not do yet
+### M2 — remote avatars
 
-Nothing about the game is synced. No avatars, no machines, no economy. M1 exists
-to prove the transport in isolation, because that's the piece that's hardest to
-debug once gameplay is layered on top.
+Other players get a real body: a clone of `PLAYER/LARRY Mesh` with every FSM, IK
+controller, collider, rigidbody, light and audio source stripped out, driven from
+the network with a nameplate over its head. Snapshots go out at 15 Hz on an
+unreliable channel; remote bodies render ~120 ms in the past and interpolate
+between snapshots, so motion stays smooth between packets.
 
-### Testing it
+### Mirror mode — testing avatars with one copy of the game
 
-You need **two machines and two Steam accounts** — Steam only runs one instance of
-a game per account, so this can't be tested solo on one PC. Solo you can still
-confirm: the overlay opens, Steam initialises, Host succeeds, a lobby ID appears,
-and the invite dialog opens.
+Steam runs one instance of a game per account, so a second player needs a second
+PC *and* a second copy. **Mirror** removes that blocker for everything except
+Steam's own delivery.
+
+Tick **Mirror me** in the overlay. Your own player state is serialised through the
+real wire format, held for a configurable delay, then fed back through the real
+receive path — spawning a real remote avatar. You get a ghost of Larry walking
+your exact path a second and a half behind you.
+
+If the ghost walks correctly, then cloning, stripping, snapshot encoding,
+interpolation, the animator binding and nameplates are all proven. The only part
+Mirror does not cover is Steam moving the bytes, and M1 already exercises that API.
+
+Slide the delay down to 0.25 s to check interpolation smoothness; push it to 5 s to
+watch a long path replay.
+
+### Still not synced
+
+No machines, no economy, no ownership. That's M3 and M4.
 
 ### Settings
 
@@ -53,6 +70,9 @@ and the invite dialog opens.
 | `MaxPlayers` | `4` | 2–8. The bandwidth model is designed around 4. |
 | `OpenOverlayOnStart` | `true` | |
 | `SuppressGameInputWhileOpen` | `true` | Disables Rewired input maps so chat typing doesn't also drive the player. |
+| `SnapshotHz` | `15` | How often local position is sent. Plenty for walking speed. |
+| `InterpolationDelaySeconds` | `0.12` | How far in the past remote bodies render. |
+| `MirrorDelaySeconds` | `1.5` | Mirror mode ghost delay. |
 
 ### Design notes
 
@@ -74,8 +94,18 @@ reasserts `CursorLockMode.None` in `OnGUI`, which runs after every `Update`.
 
 **Input suppression borrows the game's own move.** `ControllerDisconnectView` calls
 `SetAllMapsEnabled(false)` on the Rewired player when it needs to steal input;
-`InputLock` does the same by reflection. That is also the groundwork for M2, where
-remote avatars have to be cut off from local input entirely.
+`InputLock` does the same by reflection.
+
+**There is a player movement class after all.** The M0 write-up said there wasn't;
+that was wrong. `UnitySampleAssets.Characters.FirstPerson.RigidbodyFirstPersonController`
+sits on `PLAYER` — it lives in `Assembly-CSharp-firstpass`, not `Assembly-CSharp`,
+which is why the first sweep missed it. It exposes `Velocity`, `Grounded`,
+`Jumping` and `Running`, which is exactly the animation state a remote body needs.
+Read by reflection, with a transform-delta fallback for speed.
+
+**Avatars are positioned from the mesh, not the player root.** `LARRY Mesh` sits at
+a local offset inside `PLAYER`; driving the clone from the root's position plants
+it at the wrong height.
 
 ---
 

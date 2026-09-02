@@ -2,6 +2,7 @@ using System;
 using System.Text.RegularExpressions;
 using MelonLoader;
 using Steamworks;
+using TcgMultiplayer.Game;
 using TcgMultiplayer.Net;
 using TcgMultiplayer.Ui;
 using UnityEngine;
@@ -21,12 +22,16 @@ namespace TcgMultiplayer
         private static MelonPreferences_Entry<int> _pMaxPlayers;
         private static MelonPreferences_Entry<bool> _pOpenOnStart;
         private static MelonPreferences_Entry<bool> _pSuppressInput;
+        private static MelonPreferences_Entry<float> _pSendRate;
+        private static MelonPreferences_Entry<float> _pInterpDelay;
+        private static MelonPreferences_Entry<float> _pMirrorDelay;
 
         public static int MaxPlayers { get { return _pMaxPlayers != null ? Mathf.Clamp(_pMaxPlayers.Value, 2, 8) : 4; } }
         public static string ToggleKeyName { get { return _pToggleKey != null ? _pToggleKey.Value : "F9"; } }
 
         private Session _session;
         private Overlay _overlay;
+        private AvatarDirector _avatars;
         private bool _initTried;
         private float _nextInitTry;
         private bool _handledLaunchLobby;
@@ -44,8 +49,19 @@ namespace TcgMultiplayer
             _pSuppressInput = cat.CreateEntry("SuppressGameInputWhileOpen", true, "Suppress game input while overlay is open",
                 "Disables Rewired's input maps so typing in chat doesn't also drive the player.");
 
+            _pSendRate = cat.CreateEntry("SnapshotHz", 15f, "Snapshot rate (Hz)",
+                "How often the local player's position is sent. 15 is plenty for walking speed.");
+            _pInterpDelay = cat.CreateEntry("InterpolationDelaySeconds", 0.12f, "Interpolation delay (s)",
+                "Remote bodies render this far in the past so motion stays smooth between packets.");
+            _pMirrorDelay = cat.CreateEntry("MirrorDelaySeconds", 1.5f, "Mirror delay (s)",
+                "Solo test mode: how far behind you the mirrored ghost walks.");
+
             _session = new Session();
-            _overlay = new Overlay(_session) { Visible = _pOpenOnStart.Value };
+            _avatars = new AvatarDirector(_session);
+            _avatars.SendRate = _pSendRate.Value;
+            _avatars.MirrorDelay = _pMirrorDelay.Value;
+            RemoteAvatar.InterpDelay = Mathf.Clamp(_pInterpDelay.Value, 0.02f, 1f);
+            _overlay = new Overlay(_session, _avatars) { Visible = _pOpenOnStart.Value };
 
             Log("Loaded. " + ToggleKeyName + " toggles the overlay.");
         }
@@ -69,6 +85,14 @@ namespace TcgMultiplayer
 
             if (_overlay.Visible) FreeCursor();
             _session.Tick();
+            _avatars.Tick();
+        }
+
+        public override void OnSceneWasInitialized(int buildIndex, string sceneName)
+        {
+            // Scenes load additively and PLAYER is rebuilt, so every cached
+            // transform and every cloned body is stale from here.
+            _avatars.OnSceneChanged();
         }
 
         public override void OnGUI()
@@ -77,6 +101,7 @@ namespace TcgMultiplayer
             // one-shot unlock loses the fight. OnGUI runs after every Update, so
             // reasserting here is what actually makes the overlay clickable.
             if (_overlay.Visible) FreeCursor();
+            _avatars.DrawNameplates();
             _overlay.Draw();
         }
 
@@ -88,6 +113,7 @@ namespace TcgMultiplayer
 
         public override void OnApplicationQuit()
         {
+            try { _avatars.DespawnAll(); } catch { }
             try { _session.Leave(); } catch { }
             InputLock.Set(false);
         }

@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using TcgMultiplayer.Game;
 using TcgMultiplayer.Net;
 using UnityEngine;
 
@@ -15,6 +16,7 @@ namespace TcgMultiplayer.Ui
         private const int WinId = 0x7C6;
 
         private readonly Session _s;
+        private readonly AvatarDirector _av;
         private Rect _rect = new Rect(24, 24, 460, 430);
         private Vector2 _scroll;
         private string _chatDraft = "";
@@ -26,7 +28,7 @@ namespace TcgMultiplayer.Ui
 
         public bool Visible;
 
-        public Overlay(Session s) { _s = s; }
+        public Overlay(Session s, AvatarDirector av) { _s = s; _av = av; }
 
         public void Draw()
         {
@@ -112,6 +114,21 @@ namespace TcgMultiplayer.Ui
                     GUILayout.EndHorizontal();
                 }
             }
+
+            // ---- avatars --------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Avatars", _head);
+            GUILayout.Label(_av.DebugLine, _dim);
+
+            GUILayout.BeginHorizontal();
+            bool mirror = GUILayout.Toggle(_av.MirrorEnabled, "  Mirror me (solo test)", GUILayout.Width(190));
+            if (mirror != _av.MirrorEnabled) _av.MirrorEnabled = mirror;
+            GUILayout.Label("delay", _dim, GUILayout.Width(38));
+            _av.MirrorDelay = Mathf.Round(GUILayout.HorizontalSlider(_av.MirrorDelay, 0.25f, 5f) * 4f) / 4f;
+            GUILayout.Label(_av.MirrorDelay.ToString("0.00") + "s", _mono, GUILayout.Width(48));
+            GUILayout.EndHorizontal();
+            GUILayout.Label("Mirror replays your own movement through the real wire format, so the "
+                          + "avatar path can be tested without a second copy of the game.", _dim);
 
             // ---- log ------------------------------------------------------
             GUILayout.Space(6);

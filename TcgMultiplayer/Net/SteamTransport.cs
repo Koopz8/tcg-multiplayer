@@ -18,6 +18,7 @@ namespace TcgMultiplayer.Net
     {
         public const int ChannelControl = 0;   // reliable, ordered
         public const int ChannelPing = 1;      // unreliable, no delay
+        public const int ChannelState = 2;     // unreliable, no delay: player snapshots
 
         private const int SendReliable = Constants.k_nSteamNetworkingSend_Reliable;
         private const int SendUnreliableNoDelay = Constants.k_nSteamNetworkingSend_UnreliableNoDelay;
