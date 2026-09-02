@@ -16,6 +16,8 @@ namespace TcgMultiplayer.Net
         public float RttMs = -1f;
         public double LastHeardAt;
         public long PendingPingTick;
+        public ushort LastStateSeq;
+        public bool HasState;
     }
 
     /// <summary>
@@ -36,6 +38,11 @@ namespace TcgMultiplayer.Net
 
         public readonly List<Peer> Peers = new List<Peer>();
         public readonly List<string> Chat = new List<string>();
+
+        /// <summary>Raised for every remote player snapshot. AvatarDirector listens.</summary>
+        public Action<CSteamID, Game.PlayerState, ushort> OnPlayerState;
+        /// <summary>Raised when a peer leaves, so their body can be removed.</summary>
+        public Action<CSteamID> OnPeerGone;
 
         private Callback<LobbyEnter_t> _cbLobbyEnter;
         private Callback<LobbyChatUpdate_t> _cbLobbyChat;
@@ -111,6 +118,7 @@ namespace TcgMultiplayer.Net
             {
                 Send(p, Op.Bye, null);
                 SteamTransport.CloseSession(p.Id);
+                if (OnPeerGone != null) OnPeerGone(p.Id);
             }
             Peers.Clear();
             if (Lobby.IsValid()) SteamMatchmaking.LeaveLobby(Lobby);
@@ -134,6 +142,40 @@ namespace TcgMultiplayer.Net
                 Send(p, Op.Chat, w => w.Str(text));
         }
 
+        // --------------------------------------------------- player snapshots
+
+        public void BroadcastPlayerState(Game.PlayerState st, ushort seq)
+        {
+            if (State != SessionState.InLobby || Peers.Count == 0) return;
+            using (var w = new PacketWriter(Op.PlayerState))
+            {
+                WritePlayerState(w, st, seq);
+                var bytes = w.ToArray();
+                foreach (var p in Peers)
+                    SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelState, false);
+            }
+        }
+
+        public static void WritePlayerState(PacketWriter w, Game.PlayerState st, ushort seq)
+        {
+            w.U16(seq)
+             .F32(st.Pos.x).F32(st.Pos.y).F32(st.Pos.z)
+             .F32(st.Yaw).F32(st.Pitch).F32(st.Speed)
+             .U8(st.Flags);
+        }
+
+        public static Game.PlayerState ReadPlayerState(PacketReader r, out ushort seq)
+        {
+            seq = r.U16();
+            var st = new Game.PlayerState();
+            st.Pos = new UnityEngine.Vector3(r.F32(), r.F32(), r.F32());
+            st.Yaw = r.F32();
+            st.Pitch = r.F32();
+            st.Speed = r.F32();
+            st.Flags = r.U8();
+            return st;
+        }
+
         // ---------------------------------------------------------------- pump
 
         public void Tick()
@@ -143,6 +185,7 @@ namespace TcgMultiplayer.Net
             _inbox.Clear();
             SteamTransport.Poll(SteamTransport.ChannelControl, _inbox);
             SteamTransport.Poll(SteamTransport.ChannelPing, _inbox);
+            SteamTransport.Poll(SteamTransport.ChannelState, _inbox);
             for (int i = 0; i < _inbox.Count; i++) Handle(_inbox[i]);
 
             var now = _clock.Elapsed.TotalSeconds;
@@ -209,6 +252,7 @@ namespace TcgMultiplayer.Net
                 {
                     Log(p.Name + " left.");
                     SteamTransport.CloseSession(p.Id);
+                    if (OnPeerGone != null) OnPeerGone(p.Id);
                     Peers.Remove(p);
                 }
             }
@@ -293,9 +337,22 @@ namespace TcgMultiplayer.Net
                             Log(peer.Name + ": " + pr.Str());
                             break;
 
+                        case Op.PlayerState:
+                        {
+                            ushort seq;
+                            var st = ReadPlayerState(pr, out seq);
+                            // Snapshots are unreliable and can arrive out of order;
+                            // drop anything older than the newest we've applied.
+                            if (!Newer(seq, peer.LastStateSeq)) break;
+                            peer.LastStateSeq = seq;
+                            if (OnPlayerState != null) OnPlayerState(peer.Id, st, seq);
+                            break;
+                        }
+
                         case Op.Bye:
                             Log(peer.Name + " disconnected.");
                             SteamTransport.CloseSession(peer.Id);
+                            if (OnPeerGone != null) OnPeerGone(peer.Id);
                             Peers.Remove(peer);
                             break;
                     }
@@ -363,6 +420,12 @@ namespace TcgMultiplayer.Net
             p = new Peer { Id = id, Name = NameOf(id), LastHeardAt = _clock.Elapsed.TotalSeconds };
             Peers.Add(p);
             return p;
+        }
+
+        /// <summary>Sequence comparison that survives the ushort wrap.</summary>
+        private static bool Newer(ushort a, ushort b)
+        {
+            return (ushort)(a - b) < 0x8000;
         }
 
         private static string NameOf(CSteamID id)
