@@ -183,6 +183,57 @@ namespace TcgMultiplayer.Ui
                                  : ""), _dim);
             }
 
+            // ---- solo test harness ----------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Solo tests", _head);
+            GUILayout.Label("Ownership, spectating and the wallet guard only fire when someone "
+                          + "else plays. These stand in for that friend.", _dim);
+
+            var near = _mc.Nearest(PlayerPos(), 12f);
+            GUILayout.Label(near != null ? "nearest: " + near.Label : "no machine within 12m", _mono);
+
+            GUILayout.BeginHorizontal();
+            if (_mc.Rehearse.Recording)
+            {
+                if (GUILayout.Button("Stop recording (" + _mc.Rehearse.TapeLength + ")", GUILayout.Height(22)))
+                    _mc.Rehearse.StopRecording();
+            }
+            else
+            {
+                GUI.enabled = near != null;
+                if (GUILayout.Button("Record a round", GUILayout.Height(22)) && near != null)
+                    _mc.Rehearse.StartRecording(near.Id, near.Label);
+                GUI.enabled = true;
+            }
+
+            GUI.enabled = _mc.Rehearse.HasTape && !_mc.Rehearse.Playing && !_mc.Rehearse.Recording;
+            if (GUILayout.Button("Replay as a friend", GUILayout.Height(22)))
+            {
+                Machine tape;
+                if (_mc.TryGetMachine(_mc.Rehearse.RecordedMachine, out tape)) _mc.Rehearse.Play(tape);
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+
+            if (_mc.Rehearse.HasTape)
+            {
+                GUILayout.Label(_mc.Rehearse.TapeLength + " events from " + _mc.Rehearse.RecordedLabel
+                    + (_mc.Rehearse.Playing ? "  ·  replaying…" : "")
+                    + (!_mc.Rehearse.Playing && _mc.Rehearse.WalletMovedDuringPlayback == 0 && _mc.Rehearse.TapeLength > 0
+                        ? "  ·  last replay: wallet held" : "")
+                    + (_mc.Rehearse.WalletMovedDuringPlayback > 0
+                        ? "  ·  GUARD LEAKED " + _mc.Rehearse.WalletMovedDuringPlayback + "x" : ""),
+                    _mono);
+            }
+
+            GUILayout.BeginHorizontal();
+            GUI.enabled = near != null;
+            if (GUILayout.Button("Fake: friend takes it", GUILayout.Height(22))) _mc.SimulateRemoteClaim(near);
+            if (GUILayout.Button("Fake: friend leaves", GUILayout.Height(22))) _mc.SimulateRemoteRelease(near);
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+            GUILayout.Label("\"Friend takes it\" should make the cabinet refuse your card.", _dim);
+
             // ---- shared island --------------------------------------------
             GUILayout.Space(6);
             GUILayout.Label("Shared island", _head);
@@ -221,6 +272,12 @@ namespace TcgMultiplayer.Ui
 
             GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status + ".", _dim);
             GUI.DragWindow(new Rect(0, 0, 10000, 20));
+        }
+
+        private static Vector3 PlayerPos()
+        {
+            var cam = Camera.main;
+            return cam != null ? cam.transform.position : Vector3.zero;
         }
 
         private string StateLine()

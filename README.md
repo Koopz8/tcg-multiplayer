@@ -139,6 +139,28 @@ interior — and PlayMaker only registers an FSM once its GameObject has actuall
 awoken, so machines appear in `FsmList` as you walk into them. The registry now
 watches the list size and rebuilds when a new district comes online.
 
+## Solo tests — verifying the two-player features with one copy
+
+Ownership, spectating and the wallet guard only fire when *someone else* is
+playing, which with one copy of the game is never. The overlay's **Solo tests**
+panel stands in for that friend.
+
+**Rehearsal** — walk up to a machine, hit *Record a round*, play it, hit *Stop*,
+then *Replay as a friend*. The machine is handed to a fake peer for the duration
+and the recording is replayed through the genuine spectator path at the original
+timings. That exercises, in one go:
+
+- the registry resolved the right FSMs under that machine
+- event replay actually drives the cabinet
+- **the wallet guard holds your balance still while someone else's round plays**
+
+The panel reports `wallet held` or `GUARD LEAKED Nx` after each replay. If your
+coins move during a rehearsal, the guard is broken — and you find that out alone
+in a minute, rather than with a friend three milestones later.
+
+**Fake: friend takes it / leaves** — forces a remote claim on the nearest machine.
+The cabinet should visibly refuse your card, via the game's own `FREEZE MACHINE`.
+
 ### Still not synced
 
 Machine physics — the claw arm, the puck, the coins themselves (M6).
