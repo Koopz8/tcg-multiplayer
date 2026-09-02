@@ -1,0 +1,4 @@
+bin/
+obj/
+*.user
+TcgFsmDump/libs/*.dll
