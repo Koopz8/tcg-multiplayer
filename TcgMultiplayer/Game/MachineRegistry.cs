@@ -23,6 +23,22 @@ namespace TcgMultiplayer.Game
         public ulong Owner;             // SteamID, 0 = free
         public string OwnerName;
         public bool OwnedByMe;
+
+        /// <summary>
+        /// The local player is physically inside this thing right now. Tracked
+        /// separately from network ownership, because freezing a cabinet someone
+        /// is standing at traps them in it.
+        /// </summary>
+        public bool LocallyOccupied;
+
+        /// <summary>
+        /// Does this controller actually have a "Machine Is Frozen" state? Only 14
+        /// of the 72 do. Sending FREEZE MACHINE to the rest does nothing useful and
+        /// risks parking them somewhere unexpected.
+        /// </summary>
+        public bool SupportsFreeze;
+
+        public bool Frozen;
     }
 
     /// <summary>
@@ -109,6 +125,7 @@ namespace TcgMultiplayer.Game
                     Label = ShortLabel(path),
                     Root = root,
                     Controller = fsm,
+                    SupportsFreeze = HasFrozenState(fsm),
                 };
                 _byId[id] = machine;
                 _byRoot[root] = machine;
@@ -153,6 +170,19 @@ namespace TcgMultiplayer.Game
                 cur = cur.parent;
             }
             return null;
+        }
+
+        private static bool HasFrozenState(PlayMakerFSM fsm)
+        {
+            try
+            {
+                var states = fsm.FsmStates;
+                if (states == null) return false;
+                foreach (var st in states)
+                    if (st != null && st.Name == "Machine Is Frozen") return true;
+            }
+            catch { }
+            return false;
         }
 
         /// <summary>Gives the FSM the same NetId the registry filed it under.</summary>

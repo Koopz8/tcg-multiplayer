@@ -131,8 +131,16 @@ namespace TcgMultiplayer.Game
                 if (m == null) return;
 
                 var state = __instance.Name;
-                if (ClaimStates.Contains(state)) live.RequestClaim(m);
-                else if (ReleaseStates.Contains(state)) live.ReleaseIfMine(m);
+                if (ClaimStates.Contains(state))
+                {
+                    m.LocallyOccupied = true;
+                    live.RequestClaim(m);
+                }
+                else if (ReleaseStates.Contains(state))
+                {
+                    m.LocallyOccupied = false;
+                    live.ReleaseIfMine(m);
+                }
             }
             catch { }
         }
@@ -168,6 +176,20 @@ namespace TcgMultiplayer.Game
                 {
                     _lastFsmListCount = n;
                     _registry.Rebuild();
+                }
+            }
+
+            // Belt and braces: if anything ever leaves a machine owned by the fake
+            // rehearsal peer while no rehearsal is running, hand it straight back.
+            // A cabinet owned by a peer that does not exist can never be released
+            // by the normal path.
+            if (!Rehearse.Playing)
+            {
+                foreach (var m in _registry.All)
+                {
+                    if (m.Owner != Rehearsal.FakePeerId) continue;
+                    Plugin.Warn("Reclaiming " + m.Label + " from a stale rehearsal peer.");
+                    Grant(m, 0, null);
                 }
             }
 
@@ -212,7 +234,13 @@ namespace TcgMultiplayer.Game
             if (m == null || !Enabled) return;
             if (m.Owner != 0 && m.Owner != _session.SelfId.m_SteamID)
             {
-                Freeze(m);
+                // Do NOT freeze here. If the player has already got far enough into
+                // the machine to be entering a claim state, freezing traps them —
+                // "Machine Is Frozen" is a dead end in the game's own graph, with no
+                // way out but UNFREEZE. Refusing the claim is enough; they keep
+                // control of their own exit.
+                Plugin.Log("Machine " + m.Label + " is in use by "
+                           + (m.OwnerName ?? "someone else") + " — not claiming.");
                 return;
             }
 
@@ -319,12 +347,47 @@ namespace TcgMultiplayer.Game
 
         private void Freeze(Machine m)
         {
+            if (m == null || m.Frozen) return;
+            // Two hard rules, both learned the hard way:
+            //  - never freeze a machine the local player is standing in, or they
+            //    cannot leave it;
+            //  - only freeze controllers that actually have the Frozen state
+            //    (14 of 72 do) — the rest just swallow the event.
+            if (m.LocallyOccupied) return;
+            if (!m.SupportsFreeze) return;
+
+            m.Frozen = true;
             SendToController(m, "FREEZE MACHINE");
         }
 
         private void Unfreeze(Machine m)
         {
+            if (m == null || !m.Frozen) return;
+            m.Frozen = false;
             SendToController(m, "UNFREEZE MACHINE");
+        }
+
+        /// <summary>
+        /// Escape hatch. Releases every machine and unfreezes anything we froze —
+        /// bound to a hotkey and a button, because being stuck in a cabinet with no
+        /// way out is the worst failure this mod can have.
+        /// </summary>
+        public int ReleaseEverything()
+        {
+            int n = 0;
+            foreach (var m in _registry.All)
+            {
+                if (m.Frozen) { Unfreeze(m); n++; }
+                if (m.Owner != 0)
+                {
+                    m.Owner = 0; m.OwnerName = null; m.OwnedByMe = false;
+                    n++;
+                }
+                m.LocallyOccupied = false;
+            }
+            MyMachine = 0;
+            if (n > 0) Plugin.Log("Released everything (" + n + " changes).");
+            return n;
         }
 
         private void SendToController(Machine m, string evt)

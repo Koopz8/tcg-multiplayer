@@ -156,7 +156,8 @@ namespace TcgMultiplayer.Ui
                     if (m.Owner == 0) continue;      // only list what's occupied
                     GUILayout.BeginHorizontal();
                     GUILayout.Label(m.Label, _mono, GUILayout.Width(200));
-                    GUILayout.Label(m.OwnedByMe ? "yours" : ("in use by " + (m.OwnerName ?? "?")), _dim);
+                    GUILayout.Label(m.OwnedByMe ? "yours" : ("in use by " + (m.OwnerName ?? "?"))
+                        + (m.Frozen ? " · frozen" : ""), _dim);
                     GUILayout.EndHorizontal();
                     if (++shown >= 6) break;
                 }
@@ -232,7 +233,11 @@ namespace TcgMultiplayer.Ui
             if (GUILayout.Button("Fake: friend leaves", GUILayout.Height(22))) _mc.SimulateRemoteRelease(near);
             GUI.enabled = true;
             GUILayout.EndHorizontal();
-            GUILayout.Label("\"Friend takes it\" should make the cabinet refuse your card.", _dim);
+            GUILayout.Label("\"Friend takes it\" should make the cabinet refuse your card. It will "
+                          + "never freeze a machine you are standing in.", _dim);
+
+            if (GUILayout.Button("Release everything (stuck in a machine?)", GUILayout.Height(22)))
+                _mc.ReleaseEverything();
 
             // ---- shared island --------------------------------------------
             GUILayout.Space(6);
