@@ -18,6 +18,7 @@ namespace TcgMultiplayer.Ui
         private readonly Session _s;
         private readonly AvatarDirector _av;
         private readonly MachineDirector _mc;
+        private readonly WorldState _world;
         private Rect _rect = new Rect(24, 24, 460, 430);
         private Vector2 _scroll;
         private string _chatDraft = "";
@@ -29,7 +30,8 @@ namespace TcgMultiplayer.Ui
 
         public bool Visible;
 
-        public Overlay(Session s, AvatarDirector av, MachineDirector mc) { _s = s; _av = av; _mc = mc; }
+        public Overlay(Session s, AvatarDirector av, MachineDirector mc, WorldState world)
+        { _s = s; _av = av; _mc = mc; _world = world; }
 
         public void Draw()
         {
@@ -179,6 +181,15 @@ namespace TcgMultiplayer.Ui
                               + (_mc.Wallet.RestoreCount > 0
                                  ? "  ·  " + _mc.Wallet.RestoreCount + " payouts blocked from spectating"
                                  : ""), _dim);
+            }
+
+            // ---- shared island --------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Shared island", _head);
+            GUILayout.Label(_world.DebugLine, _dim);
+            {
+                GUILayout.Label("Unlocks, doors and vehicles are shared and host-arbitrated. "
+                              + "Money, tickets, prizes and inventory stay yours.", _dim);
             }
 
             // ---- log ------------------------------------------------------

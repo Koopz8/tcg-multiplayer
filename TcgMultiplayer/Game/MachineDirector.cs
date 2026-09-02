@@ -45,6 +45,8 @@ namespace TcgMultiplayer.Game
         private bool _dirty = true;
         private float _nextWalletAt;
         private int _lastCoins = int.MinValue, _lastTickets = int.MinValue;
+        private float _nextScanCheckAt;
+        private int _lastFsmListCount = -1;
 
         public int MachineCount { get { return _registry.Count; } }
         public IEnumerable<Machine> Machines { get { return _registry.All; } }
@@ -146,7 +148,25 @@ namespace TcgMultiplayer.Game
             if (_dirty && Time.time >= _nextRebuildAt)
             {
                 _dirty = false;
+                _lastFsmListCount = FsmListCount();
                 _registry.Rebuild();
+            }
+
+            // A one-shot scan after the scene loads misses almost everything.
+            // Most of the island starts deactivated ("CARNIE Starts OFF",
+            // "OUTSIDE Starts OFF", the arcade interior), and PlayMaker only
+            // registers an FSM once its GameObject has actually awoken — so
+            // machines appear in FsmList as you walk into them. Watching the list
+            // size is a cheap way to notice a new district coming online.
+            if (Time.time >= _nextScanCheckAt)
+            {
+                _nextScanCheckAt = Time.time + 2f;
+                int n = FsmListCount();
+                if (_lastFsmListCount < 0 || Mathf.Abs(n - _lastFsmListCount) > 32)
+                {
+                    _lastFsmListCount = n;
+                    _registry.Rebuild();
+                }
             }
 
             // Scoreboard only — nothing authoritative rides on these numbers, so
@@ -161,6 +181,11 @@ namespace TcgMultiplayer.Game
                     _session.BroadcastWallet(c, t, Wallet.TicketsThisSession);
                 }
             }
+        }
+
+        private static int FsmListCount()
+        {
+            try { return PlayMakerFSM.FsmList.Count; } catch { return -1; }
         }
 
         public void RebuildNow()
