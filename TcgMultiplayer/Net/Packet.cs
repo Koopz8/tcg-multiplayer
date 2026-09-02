@@ -16,6 +16,7 @@ namespace TcgMultiplayer.Net
         MachineClaim = 8,  // client -> host: I put my card in / I'm done
         MachineOwner = 9,  // host -> all: this machine belongs to X (0 = free)
         MachineEvent = 10, // owner -> spectators: replay this FSM event
+        Wallet = 11,       // periodic: my coins and tickets, for the scoreboard
     }
 
     /// <summary>

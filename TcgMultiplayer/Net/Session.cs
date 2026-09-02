@@ -18,6 +18,9 @@ namespace TcgMultiplayer.Net
         public long PendingPingTick;
         public ushort LastStateSeq;
         public bool HasState;
+        // Their wallet, for the scoreboard only. Nothing authoritative rides on this.
+        public int Coins, Tickets, TicketsSession;
+        public bool HasWallet;
     }
 
     /// <summary>
@@ -228,6 +231,20 @@ namespace TcgMultiplayer.Net
             return null;
         }
 
+        // -------------------------------------------------------------- wallets
+
+        public void BroadcastWallet(int coins, int tickets, int session)
+        {
+            if (State != SessionState.InLobby || Peers.Count == 0) return;
+            using (var w = new PacketWriter(Op.Wallet))
+            {
+                w.I32(coins).I32(tickets).I32(session);
+                var bytes = w.ToArray();
+                foreach (var p in Peers)
+                    SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
+            }
+        }
+
         // ---------------------------------------------------------------- pump
 
         public void Tick()
@@ -426,6 +443,13 @@ namespace TcgMultiplayer.Net
                             if (OnMachineEvent != null) OnMachineEvent(peer.Id, mid, fid, evt);
                             break;
                         }
+
+                        case Op.Wallet:
+                            peer.Coins = pr.I32();
+                            peer.Tickets = pr.I32();
+                            peer.TicketsSession = pr.I32();
+                            peer.HasWallet = true;
+                            break;
 
                         case Op.Bye:
                             Log(peer.Name + " disconnected.");

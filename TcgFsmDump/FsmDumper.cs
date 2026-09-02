@@ -52,6 +52,8 @@ namespace TcgFsmDump
                 }
                 j.EndArray();
 
+                WriteGlobals(j);
+
                 j.Prop("fsmCount", fsms.Count);
                 j.StartArray("fsms");
 
@@ -230,6 +232,49 @@ namespace TcgFsmDump
             return jsonPath;
         }
 
+        /// <summary>
+        /// PlayMaker's GLOBAL variables — the ones shared by every graph in the
+        /// game. Per-FSM variables are all local scratch; anything that behaves
+        /// like a player's wallet (coins, tickets, credits) has to live here, so
+        /// this is the section to read when you want to know what the economy
+        /// actually is.
+        /// </summary>
+        private static void WriteGlobals(JsonWriter j)
+        {
+            j.StartArray("globalVariables");
+            try
+            {
+                var globals = FsmVariables.GlobalVariables;
+                if (globals != null)
+                {
+                    var all = globals.GetAllNamedVariables();
+                    if (all != null)
+                    {
+                        foreach (var v in all)
+                        {
+                            if (v == null) continue;
+                            j.StartObject();
+                            j.Prop("name", v.Name);
+                            j.Prop("type", v.VariableType.ToString());
+                            j.Prop("value", SafeValue(v));
+                            j.EndObject();
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { Plugin.Warn("Global variable dump failed: " + ex.Message); }
+            j.EndArray();
+
+            j.StartArray("globalEvents");
+            try
+            {
+                var evts = FsmEvent.globalEvents;
+                if (evts != null) foreach (var e in evts) j.Value(e);
+            }
+            catch (Exception ex) { Plugin.Warn("Global event dump failed: " + ex.Message); }
+            j.EndArray();
+        }
+
         // ------------------------------------------------------------------
 
         private static List<PlayMakerFSM> Collect()
@@ -365,11 +410,33 @@ namespace TcgFsmDump
                 w.WriteLine("Objects w/ ES2UniqueID  " + es2Present + " / " + fsmCount);
                 w.WriteLine("Path-hash collisions .. " + collisions + (collisions > 0 ? "   <-- NetId scheme needs 64-bit" : "   (32-bit path hash is safe here)"));
                 w.WriteLine();
+                WriteGlobalsSummary(w);
                 Top(w, "FSM names", fsmNames, 60);
                 Top(w, "Non-system events", events, 200);
                 Top(w, "State names", stateNames, 80);
                 Top(w, "Variable names", varNames, 120);
             }
+        }
+
+        private static void WriteGlobalsSummary(TextWriter w)
+        {
+            try
+            {
+                var globals = FsmVariables.GlobalVariables;
+                var all = globals != null ? globals.GetAllNamedVariables() : null;
+                if (all == null) { w.WriteLine("== PlayMaker globals: none readable =="); w.WriteLine(); return; }
+
+                w.WriteLine("== PlayMaker GLOBAL variables (" + all.Length + ") ==");
+                w.WriteLine("   the shared economy lives here, not in per-FSM variables");
+                w.WriteLine();
+                foreach (var v in all)
+                {
+                    if (v == null) continue;
+                    w.WriteLine("  " + v.VariableType.ToString().PadRight(12) + v.Name.PadRight(44) + "= " + SafeValue(v));
+                }
+                w.WriteLine();
+            }
+            catch (Exception ex) { w.WriteLine("== globals unreadable: " + ex.Message + " =="); w.WriteLine(); }
         }
 
         private static void Top(TextWriter w, string title, Dictionary<string, int> d, int take)

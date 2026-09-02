@@ -11,7 +11,7 @@ namespace TcgFsmDump
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.1.0";
+        public const string Version = "0.2.0";
 
         private static Plugin _instance;
         private HarmonyLib.Harmony _harmony;

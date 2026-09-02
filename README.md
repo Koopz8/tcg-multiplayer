@@ -83,10 +83,37 @@ shows sent/applied counts so drift is visible.
 One adapter covers all 72 interactables — cabinets, rides, booths, vending
 machines, lotto menus and the four vehicles.
 
+### M4 — per-player wallets
+
+Every player keeps their own money, tickets, prizes and inventory. That needed
+**no synchronisation at all** — each client runs its own PlayMaker globals, so
+separate wallets are the default state. What it needed was a *guard*.
+
+M3's spectating replays the machine owner's FSM events, and the payout is one of
+those events: left alone, everyone watching a Skee Ball win gets paid for it. So
+the economy globals are snapshotted immediately before a mirrored event is applied
+and restored immediately after. That closes every payout path at once rather than
+blacklisting the handful anyone thought to look for.
+
+The list of what's protected came from dumping all **658** PlayMaker globals — the
+economy partitions cleanly by name (`COINS *`, `TICKETS *`, `CHIPS *`,
+`GAMECARDS *`, `PRIZE CREDITS *`, `INVENTORYSPOT_*`, `PLAYCOUNT_*`, the per-machine
+game credits, and player condition like `HEALTH Balance` / `BATTERY POWER`). It's a
+prefix list in `MelonPreferences` under `ProtectedEconomyGlobals`, so a game patch
+that adds a currency doesn't need a rebuild.
+
+Balances are broadcast once a second purely so the overlay can show a scoreboard —
+nothing authoritative rides on them. Coins are stored in cents (`COINS Balance` 250
+is `$2.50`).
+
+**Not yet decided:** what a guest carries home. Coins, tickets and inventory are
+clearly theirs. But `SURVIVOR_*_Unlocked_Balance` and the vehicle `*_Purchased`
+flags are the *host's island* progression, and letting a guest change those means
+joining a stranger's world permanently alters it.
+
 ### Still not synced
 
-The shared wallet (M4), and machine physics — the claw arm, the puck, the coins
-themselves (M5).
+Machine physics — the claw arm, the puck, the coins themselves (M5).
 
 ### Settings
 
