@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>TcgMultiplayer</AssemblyName>
+    <RootNamespace>TcgMultiplayer</RootNamespace>
+    <Version>0.1.0</Version>
+    <LangVersion>7.3</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AssemblyTitle>TcgMultiplayer</AssemblyTitle>
+    <Description>Multiplayer for The Coin Game. M1: Steam lobby and peer transport.</Description>
+    <DebugType>portable</DebugType>
+    <NoWarn>$(NoWarn);CS0649;CS0414</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="LavaGang.MelonLoader" Version="0.6.6" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="HarmonyX" Version="2.10.2" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!-- Game assemblies, copied into libs/ from <game>/TheCoinGame_Data/Managed -->
+  <ItemGroup>
+    <Reference Include="com.rlabrecque.steamworks.net">
+      <HintPath>libs\com.rlabrecque.steamworks.net.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>libs\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>libs\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>libs\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>libs\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
