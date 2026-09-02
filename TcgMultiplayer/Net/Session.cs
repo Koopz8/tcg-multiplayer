@@ -56,6 +56,8 @@ namespace TcgMultiplayer.Net
         public Action<CSteamID, string, object, bool> OnWorldVar;
         /// <summary>Host only: this peer just joined and wants the island's current state.</summary>
         public Action<CSteamID> OnWorldSnapshotRequest;
+        /// <summary>Rigidbody poses inside a machine someone else is playing.</summary>
+        public Action<CSteamID, uint, byte[]> OnMachinePhysics;
 
         private Callback<LobbyEnter_t> _cbLobbyEnter;
         private Callback<LobbyChatUpdate_t> _cbLobbyChat;
@@ -224,6 +226,23 @@ namespace TcgMultiplayer.Net
                 // for the rest of the round, unlike a dropped position snapshot.
                 foreach (var p in Peers)
                     SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
+            }
+        }
+
+        /// <summary>
+        /// Unreliable and unordered: physics is a stream of "here is the truth
+        /// right now", so a dropped frame costs nothing and a late one is worse
+        /// than useless.
+        /// </summary>
+        public void SendMachinePhysics(uint machineId, byte[] payload)
+        {
+            if (State != SessionState.InLobby || Peers.Count == 0 || payload == null) return;
+            using (var w = new PacketWriter(Op.MachinePhysics))
+            {
+                w.U32(machineId).Bytes(payload);
+                var bytes = w.ToArray();
+                foreach (var p in Peers)
+                    SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelState, false);
             }
         }
 
@@ -518,6 +537,14 @@ namespace TcgMultiplayer.Net
                         case Op.WorldSync:
                             if (OnWorldSnapshotRequest != null) OnWorldSnapshotRequest(peer.Id);
                             break;
+
+                        case Op.MachinePhysics:
+                        {
+                            uint mid = pr.U32();
+                            var payload = pr.Bytes();
+                            if (OnMachinePhysics != null) OnMachinePhysics(peer.Id, mid, payload);
+                            break;
+                        }
 
                         case Op.Bye:
                             Log(peer.Name + " disconnected.");

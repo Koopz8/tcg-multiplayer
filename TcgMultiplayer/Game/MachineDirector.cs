@@ -38,6 +38,7 @@ namespace TcgMultiplayer.Game
         private readonly MachineRegistry _registry = new MachineRegistry();
         public readonly WalletGuard Wallet = new WalletGuard();
         public readonly Rehearsal Rehearse = new Rehearsal();
+        public readonly PhysicsReplicator Physics = new PhysicsReplicator();
 
         // Set while we're replaying a mirrored event, so it isn't re-broadcast.
         private static bool _applying;
@@ -64,6 +65,7 @@ namespace TcgMultiplayer.Game
             _session.OnMachineClaim += OnClaimRequest;
             _session.OnMachineOwner += OnOwnerAnnounced;
             _session.OnMachineEvent += OnMirroredEvent;
+            _session.OnMachinePhysics += OnPhysics;
             _session.OnPeerGone += OnPeerGone;
             _live = this;
         }
@@ -147,6 +149,7 @@ namespace TcgMultiplayer.Game
 
         public void OnSceneChanged()
         {
+            Physics.ReleaseAll();
             _registry.Clear();
             _dirty = true;
             MyMachine = 0;
@@ -193,11 +196,33 @@ namespace TcgMultiplayer.Game
                 }
             }
 
+            // Only the machine you're actually playing gets its physics streamed,
+            // and only while someone is playing it — which is the interest
+            // management the plan called for, arrived at for free: one machine is
+            // occupied at a time, per player.
+            if (MyMachine != 0 && Physics.ShouldSend(Time.time))
+            {
+                Machine mine;
+                if (_registry.TryGet(MyMachine, out mine) && mine.OwnedByMe)
+                {
+                    var payload = Physics.Pack(mine);
+                    if (payload != null)
+                    {
+                        // Recorded offline too, so a rehearsal replays the coins.
+                        Rehearse.NoteFrame(mine.Id, payload);
+                        if (_session.State == SessionState.InLobby && _session.Peers.Count > 0)
+                            _session.SendMachinePhysics(mine.Id, payload);
+                    }
+                }
+            }
+
+            Physics.Render();
+
             if (Rehearse.Playing)
             {
                 Machine rm;
                 if (_registry.TryGet(Rehearse.RecordedMachine, out rm))
-                    Rehearse.Tick(rm, ApplyAsRemote, () => Wallet.RestoreCount);
+                    Rehearse.Tick(rm, ApplyAsRemote, (mm, pay) => Physics.Unpack(mm, pay), () => Wallet.RestoreCount);
                 else Rehearse.Stop(null);
             }
 
@@ -314,11 +339,12 @@ namespace TcgMultiplayer.Game
             m.OwnedByMe = owner != 0 && owner == _session.SelfId.m_SteamID;
 
             if (m.Id == MyMachine && !m.OwnedByMe) MyMachine = 0;
-            if (m.OwnedByMe) MyMachine = m.Id;
+            if (m.OwnedByMe) { MyMachine = m.Id; Physics.ReleaseMachine(m.Id); }
 
             if (owner == 0)
             {
                 Unfreeze(m);
+                Physics.ReleaseMachine(m.Id);    // local simulation resumes
                 Plugin.Log("Machine free: " + m.Label);
             }
             else if (!m.OwnedByMe)
@@ -386,6 +412,7 @@ namespace TcgMultiplayer.Game
                 m.LocallyOccupied = false;
             }
             MyMachine = 0;
+            Physics.ReleaseAll();
             if (n > 0) Plugin.Log("Released everything (" + n + " changes).");
             return n;
         }
@@ -435,6 +462,14 @@ namespace TcgMultiplayer.Game
                 live.MirroredEventsSent++;
             }
             catch { /* never let a hook take down the frame */ }
+        }
+
+        private void OnPhysics(CSteamID from, uint machineId, byte[] payload)
+        {
+            Machine m;
+            if (!_registry.TryGet(machineId, out m)) return;
+            if (m.OwnedByMe) return;             // we're the one simulating it
+            Physics.Unpack(m, payload);
         }
 
         /// <summary>The genuine spectator path, reachable by Rehearsal so a solo
