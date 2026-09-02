@@ -32,7 +32,15 @@ namespace TcgMultiplayer.Game
         public const ulong FakePeerId = 2UL;      // not a valid SteamID
         public const string FakePeerName = "Rehearsal";
 
+        private struct Frame
+        {
+            public float T;
+            public byte[] Payload;
+        }
+
         private readonly List<Beat> _tape = new List<Beat>(256);
+        private readonly List<Frame> _film = new List<Frame>(512);
+        private int _filmCursor;
         private float _recordStart;
         private uint _recordedMachine;
         private string _recordedLabel = "";
@@ -52,13 +60,15 @@ namespace TcgMultiplayer.Game
         public string RecordedLabel { get { return _recordedLabel; } }
         public int WalletMovedDuringPlayback { get; private set; }
 
-        public bool HasTape { get { return _tape.Count > 0 && _recordedMachine != 0; } }
+        public bool HasTape { get { return (_tape.Count > 0 || _film.Count > 0) && _recordedMachine != 0; } }
+        public int FilmLength { get { return _film.Count; } }
 
         // ------------------------------------------------------------ recording
 
         public void StartRecording(uint machineId, string label)
         {
             _tape.Clear();
+            _film.Clear();
             _recordedMachine = machineId;
             _recordedLabel = label ?? "";
             _recordStart = Time.time;
@@ -70,7 +80,8 @@ namespace TcgMultiplayer.Game
         {
             if (!Recording) return;
             Recording = false;
-            Plugin.Log("Rehearsal: recorded " + _tape.Count + " events from " + _recordedLabel);
+            Plugin.Log("Rehearsal: recorded " + _tape.Count + " events and "
+                       + _film.Count + " physics frames from " + _recordedLabel);
         }
 
         public void Note(uint machineId, uint fsmId, string evt)
@@ -78,6 +89,18 @@ namespace TcgMultiplayer.Game
             if (!Recording || machineId != _recordedMachine) return;
             if (_tape.Count >= 2048) return;                 // a round is dozens, not thousands
             _tape.Add(new Beat { T = Time.time - _recordStart, FsmId = fsmId, Event = evt });
+        }
+
+        /// <summary>
+        /// Physics goes on the same tape, so a rehearsal replays the coins as well
+        /// as the logic — otherwise M6 would be the one layer that still needs a
+        /// second person to test.
+        /// </summary>
+        public void NoteFrame(uint machineId, byte[] payload)
+        {
+            if (!Recording || machineId != _recordedMachine || payload == null) return;
+            if (_film.Count >= 4096) return;
+            _film.Add(new Frame { T = Time.time - _recordStart, Payload = payload });
         }
 
         // ------------------------------------------------------------- playback
@@ -101,6 +124,7 @@ namespace TcgMultiplayer.Game
 
             _playing = true;
             _cursor = 0;
+            _filmCursor = 0;
             _playStart = Time.time;
             WalletMovedDuringPlayback = 0;
             Plugin.Log("Rehearsal: replaying " + _tape.Count + " events on " + _recordedLabel + " as " + FakePeerName);
@@ -129,8 +153,9 @@ namespace TcgMultiplayer.Game
                             ? " — guard held." : " — GUARD LEAKED."));
         }
 
-        /// <summary>Feeds due events back through the caller's real spectator handler.</summary>
-        public void Tick(Machine m, Action<uint, uint, string> applyAsRemote, Func<int> walletRestores)
+        /// <summary>Feeds due events and physics frames back through the real spectator handlers.</summary>
+        public void Tick(Machine m, Action<uint, uint, string> applyAsRemote,
+                         Action<Machine, byte[]> applyPhysics, Func<int> walletRestores)
         {
             if (!_playing) return;
             if (m == null) { Stop(null); return; }   // still hands the machine back
@@ -144,9 +169,15 @@ namespace TcgMultiplayer.Game
                 applyAsRemote(m.Id, b.FsmId, b.Event);
             }
 
+            while (_filmCursor < _film.Count && _film[_filmCursor].T <= now)
+            {
+                var f = _film[_filmCursor++];
+                if (applyPhysics != null) applyPhysics(m, f.Payload);
+            }
+
             WalletMovedDuringPlayback += Mathf.Max(0, walletRestores() - before);
 
-            if (_cursor >= _tape.Count) Stop(m);
+            if (_cursor >= _tape.Count && _filmCursor >= _film.Count) Stop(m);
         }
 
         public uint RecordedMachine { get { return _recordedMachine; } }

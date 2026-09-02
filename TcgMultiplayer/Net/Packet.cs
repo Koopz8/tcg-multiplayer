@@ -19,6 +19,7 @@ namespace TcgMultiplayer.Net
         Wallet = 11,       // periodic: my coins and tickets, for the scoreboard
         WorldVar = 12,     // shared island progression: unlock, vehicle purchase
         WorldSync = 13,    // joiner -> host: send me the island as it stands
+        MachinePhysics = 14, // owner -> spectators: quantised rigidbody poses
     }
 
     /// <summary>
@@ -55,6 +56,12 @@ namespace TcgMultiplayer.Net
         public PacketWriter Bool(bool v) { _w.Write(v); return this; }
         public PacketWriter F32(float v) { _w.Write(v); return this; }
         public PacketWriter U8(byte v) { _w.Write(v); return this; }
+        public PacketWriter Bytes(byte[] v)
+        {
+            _w.Write((ushort)(v == null ? 0 : v.Length));
+            if (v != null && v.Length > 0) _w.Write(v);
+            return this;
+        }
 
         public byte[] ToArray() { _w.Flush(); return _ms.ToArray(); }
         public void Dispose() { _w.Close(); _ms.Dispose(); }
@@ -88,6 +95,7 @@ namespace TcgMultiplayer.Net
         public bool Bool() { return _r.ReadBoolean(); }
         public float F32() { return _r.ReadSingle(); }
         public byte U8() { return _r.ReadByte(); }
+        public byte[] Bytes() { int n = _r.ReadUInt16(); return n == 0 ? null : _r.ReadBytes(n); }
 
         public void Dispose() { _r.Close(); _ms.Dispose(); }
     }

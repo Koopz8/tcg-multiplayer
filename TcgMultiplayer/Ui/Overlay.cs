@@ -164,6 +164,13 @@ namespace TcgMultiplayer.Ui
                 if (shown == 0) GUILayout.Label("All free.", _dim);
                 GUILayout.Label("mirrored events: " + _mc.MirroredEventsSent + " sent, "
                               + _mc.MirroredEventsApplied + " applied", _dim);
+                GUILayout.Label("physics: " + _mc.Physics.BodiesSent + " bodies sent, "
+                              + _mc.Physics.BodiesApplied + " applied, "
+                              + _mc.Physics.LastPacketBytes.ToString("0") + " B/frame"
+                              + (_mc.Physics.SpectatedMachines > 0
+                                 ? "  ·  spectating " + _mc.Physics.SpectatedMachines : "")
+                              + (_mc.Physics.CountMismatches > 0
+                                 ? "  ·  " + _mc.Physics.CountMismatches + " count mismatches" : ""), _dim);
             }
 
             // ---- wallet ---------------------------------------------------
@@ -218,7 +225,8 @@ namespace TcgMultiplayer.Ui
 
             if (_mc.Rehearse.HasTape)
             {
-                GUILayout.Label(_mc.Rehearse.TapeLength + " events from " + _mc.Rehearse.RecordedLabel
+                GUILayout.Label(_mc.Rehearse.TapeLength + " events + " + _mc.Rehearse.FilmLength
+                    + " physics frames from " + _mc.Rehearse.RecordedLabel
                     + (_mc.Rehearse.Playing ? "  ·  replaying…" : "")
                     + (!_mc.Rehearse.Playing && _mc.Rehearse.WalletMovedDuringPlayback == 0 && _mc.Rehearse.TapeLength > 0
                         ? "  ·  last replay: wallet held" : "")

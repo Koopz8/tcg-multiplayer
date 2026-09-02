@@ -182,9 +182,33 @@ causes, all now fixed:
   its own reference and always gives the machine back, plus there's a sweep each
   frame that reclaims anything still held by a stale rehearsal peer.
 
-### Still not synced
+### M6 — machine physics
 
-Machine physics — the claw arm, the puck, the coins themselves (M6).
+Event mirroring carries a machine's *logic*, which is all the zero-rigidbody
+cabinets need (Speed Drop, Big Bass, vending, bulk candy). It is not enough for a
+claw or a coin pusher, where the point is where the physical objects ended up —
+and PhysX is not deterministic across machines, so both sides simulating the same
+round diverge within a second.
+
+So the owner simulates and everyone else watches. Rigidbodies under the owned
+machine are gathered depth-first, packed relative to the machine's own root as
+3×int16 position (1 mm) + 4×int16 rotation = **14 bytes a body**, and sent
+unreliable at 20 Hz. Spectators go kinematic and interpolate.
+
+Measured worst case from the M0 dump is 100 bodies (Claw Machine Balls) and 63–66
+coins per pusher — about **18 KB/s for the busiest machine in the game**, and only
+while somebody is actually playing it. Interest management came free: one machine
+is occupied at a time per player, so only that machine streams.
+
+**Addressing is by ordinal, not by path.** Coins are runtime clones that share a
+name, so paths can't tell them apart. That only holds while both sides agree how
+many bodies exist — which is exactly what the event mirror keeps true — so a count
+mismatch is detected, skipped and counted rather than silently putting coin 40's
+position onto coin 39. The overlay shows the mismatch count.
+
+Physics frames go onto the Rehearsal tape too, so a coin pusher round can be
+recorded and replayed solo: the coins move from the recording while local physics
+is switched off, which is the same path a real spectator takes.
 
 ### Settings
 
