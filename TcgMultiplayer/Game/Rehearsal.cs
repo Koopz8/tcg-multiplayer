@@ -38,6 +38,7 @@ namespace TcgMultiplayer.Game
         private string _recordedLabel = "";
 
         // playback
+        private Machine _held;          // the machine we borrowed; always given back
         private bool _playing;
         private int _cursor;
         private float _playStart;
@@ -89,6 +90,7 @@ namespace TcgMultiplayer.Game
         {
             if (_playing || !HasTape || m == null || m.Id != _recordedMachine) return false;
 
+            _held = m;
             _savedOwner = m.Owner;
             _savedOwnerName = m.OwnerName;
             _savedOwnedByMe = m.OwnedByMe;
@@ -109,12 +111,19 @@ namespace TcgMultiplayer.Game
         {
             if (!_playing) return;
             _playing = false;
-            if (m != null)
+
+            // Give the machine back to whoever had it, using our own reference —
+            // an earlier version relied on the caller passing it and handed null
+            // on the failure path, which left the cabinet owned by a peer that
+            // does not exist and frozen forever.
+            var target = m ?? _held;
+            if (target != null)
             {
-                m.Owner = _savedOwner;
-                m.OwnerName = _savedOwnerName;
-                m.OwnedByMe = _savedOwnedByMe;
+                target.Owner = _savedOwner;
+                target.OwnerName = _savedOwnerName;
+                target.OwnedByMe = _savedOwnedByMe;
             }
+            _held = null;
             Plugin.Log("Rehearsal: done. Wallet moved " + WalletMovedDuringPlayback
                        + " time(s) during playback" + (WalletMovedDuringPlayback == 0
                             ? " — guard held." : " — GUARD LEAKED."));
@@ -124,7 +133,7 @@ namespace TcgMultiplayer.Game
         public void Tick(Machine m, Action<uint, uint, string> applyAsRemote, Func<int> walletRestores)
         {
             if (!_playing) return;
-            if (m == null) { _playing = false; return; }
+            if (m == null) { Stop(null); return; }   // still hands the machine back
 
             int before = walletRestores();
             float now = Time.time - _playStart;

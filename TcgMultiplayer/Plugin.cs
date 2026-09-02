@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.6.0";
+        public const string Version = "0.6.1";
 
         private static Plugin _instance;
 
@@ -26,6 +26,7 @@ namespace TcgMultiplayer
         private static MelonPreferences_Entry<float> _pInterpDelay;
         private static MelonPreferences_Entry<float> _pMirrorDelay;
         private static MelonPreferences_Entry<float> _pAnimSpeedScale;
+        private static MelonPreferences_Entry<string> _pPanicKey;
 
         public static int MaxPlayers { get { return _pMaxPlayers != null ? Mathf.Clamp(_pMaxPlayers.Value, 2, 8) : 4; } }
         public static string ToggleKeyName { get { return _pToggleKey != null ? _pToggleKey.Value : "F9"; } }
@@ -60,6 +61,9 @@ namespace TcgMultiplayer
             _pMirrorDelay = cat.CreateEntry("MirrorDelaySeconds", 1.5f, "Mirror delay (s)",
                 "Solo test mode: how far behind you the mirrored ghost walks.");
 
+            _pPanicKey = cat.CreateEntry("ReleaseEverythingKey", "F11", "Release-everything key",
+                "Unfreezes every machine and clears all ownership. Use it if a cabinet ever "
+                + "refuses to let you out.");
             _pAnimSpeedScale = cat.CreateEntry("AnimatorSpeedScale", 1f, "Animator speed scale",
                 "Multiplies the value fed to the walk/run blend. Raise it if remote bodies "
                 + "glide with their legs barely moving, lower it if they sprint on the spot.");
@@ -92,7 +96,8 @@ namespace TcgMultiplayer
             try { _machines.ApplyPatches(_harmony); }
             catch (Exception ex) { Warn("Harmony patching failed: " + ex); }
 
-            Log("Loaded. " + ToggleKeyName + " toggles the overlay.");
+            Log("Loaded. " + ToggleKeyName + " toggles the overlay, "
+                + (_pPanicKey != null ? _pPanicKey.Value : "F11") + " releases every machine.");
         }
 
         public override void OnUpdate()
@@ -111,6 +116,9 @@ namespace TcgMultiplayer
                 _overlay.Visible = !_overlay.Visible;
                 ApplyInputLock();
             }
+
+            if (Hotkeys.Down(_pPanicKey != null ? _pPanicKey.Value : "F11"))
+                _machines.ReleaseEverything();
 
             if (_overlay.Visible) FreeCursor();
             _session.Tick();
@@ -145,6 +153,7 @@ namespace TcgMultiplayer
 
         public override void OnApplicationQuit()
         {
+            try { _machines.ReleaseEverything(); } catch { }
             try { _avatars.DespawnAll(); } catch { }
             try { _session.Leave(); } catch { }
             InputLock.Set(false);

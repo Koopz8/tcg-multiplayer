@@ -161,6 +161,27 @@ in a minute, rather than with a friend three milestones later.
 **Fake: friend takes it / leaves** — forces a remote claim on the nearest machine.
 The cabinet should visibly refuse your card, via the game's own `FREEZE MACHINE`.
 
+**F11 releases everything** if a machine ever refuses to let you out.
+
+### Freezing has rules, learned the hard way
+
+The first version of the solo harness trapped the player inside a machine. Three
+causes, all now fixed:
+
+- **`Machine Is Frozen` is a dead end.** It's the game's own state and there is no
+  transition out of it except `UNFREEZE MACHINE`. Freezing a cabinet the player is
+  standing in removes their only exit. Machines now track `LocallyOccupied`
+  separately from network ownership, and a machine you are inside is never frozen —
+  refusing the claim is enough, and you keep control of your own exit.
+- **Only 14 of the 72 controllers even have that state.** The rest silently swallow
+  `FREEZE MACHINE`, so the registry now records `SupportsFreeze` and only freezes
+  the ones that mean it.
+- **Rehearsal could strand a machine.** It borrowed ownership on play and restored
+  it from a caller-supplied reference, which was `null` on the failure path — leaving
+  the cabinet owned by a peer that does not exist and frozen forever. It now keeps
+  its own reference and always gives the machine back, plus there's a sweep each
+  frame that reclaims anything still held by a stale rehearsal peer.
+
 ### Still not synced
 
 Machine physics — the claw arm, the puck, the coins themselves (M6).
