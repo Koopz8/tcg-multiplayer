@@ -52,6 +52,10 @@ namespace TcgMultiplayer.Net
         public Action<uint, ulong, string> OnMachineOwner;
         /// <summary>An FSM event the machine's owner wants spectators to replay.</summary>
         public Action<CSteamID, uint, uint, string> OnMachineEvent;
+        /// <summary>Shared island progression changed. Last arg: true if this is the host's ruling.</summary>
+        public Action<CSteamID, string, object, bool> OnWorldVar;
+        /// <summary>Host only: this peer just joined and wants the island's current state.</summary>
+        public Action<CSteamID> OnWorldSnapshotRequest;
 
         private Callback<LobbyEnter_t> _cbLobbyEnter;
         private Callback<LobbyChatUpdate_t> _cbLobbyChat;
@@ -245,6 +249,50 @@ namespace TcgMultiplayer.Net
             }
         }
 
+        // ----------------------------------------------------------- world state
+
+        /// <summary>
+        /// Typed on the wire so a bool doesn't arrive as an int and silently
+        /// unlock something. 0 = int, 1 = float, 2 = bool.
+        /// </summary>
+        public void SendWorldVar(string name, object value, bool asHost = false, CSteamID? onlyTo = null)
+        {
+            if (State != SessionState.InLobby) return;
+
+            byte kind; int i = 0; float f = 0f; bool b = false;
+            if (value is bool) { kind = 2; b = (bool)value; }
+            else if (value is float || value is double) { kind = 1; f = Convert.ToSingle(value); }
+            else { kind = 0; i = Convert.ToInt32(value); }
+
+            using (var w = new PacketWriter(Op.WorldVar))
+            {
+                w.Str(name).U8(kind).Bool(asHost).I32(i).F32(f).Bool(b);
+                var bytes = w.ToArray();
+
+                if (asHost)
+                {
+                    foreach (var p in Peers)
+                    {
+                        if (onlyTo.HasValue && p.Id != onlyTo.Value) continue;
+                        SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
+                    }
+                }
+                else
+                {
+                    var host = HostPeer();
+                    if (host != null) SteamTransport.Send(host.Id, bytes, SteamTransport.ChannelControl, true);
+                }
+            }
+        }
+
+        /// <summary>Joiner: ask the host for the island as it currently stands.</summary>
+        public void RequestWorldSnapshot()
+        {
+            var host = HostPeer();
+            if (host == null) return;
+            SendOn(host, Op.WorldSync, SteamTransport.ChannelControl, true, null);
+        }
+
         // ---------------------------------------------------------------- pump
 
         public void Tick()
@@ -382,6 +430,9 @@ namespace TcgMultiplayer.Net
                             peer.ModVersion = pr.Str();
                             peer.Handshaked = true;
                             Log("Connected to " + peer.Name + " (mod " + peer.ModVersion + ")");
+                            // Now that we can talk, pull the host's island down so we
+                            // arrive in their world rather than our own.
+                            if (!IsHost) RequestWorldSnapshot();
                             break;
 
                         case Op.Ping:
@@ -449,6 +500,23 @@ namespace TcgMultiplayer.Net
                             peer.Tickets = pr.I32();
                             peer.TicketsSession = pr.I32();
                             peer.HasWallet = true;
+                            break;
+
+                        case Op.WorldVar:
+                        {
+                            string name = pr.Str();
+                            byte kind = pr.U8();
+                            bool asHost = pr.Bool();
+                            int iv = pr.I32();
+                            float fv = pr.F32();
+                            bool bv = pr.Bool();
+                            object val = kind == 2 ? (object)bv : kind == 1 ? (object)fv : (object)iv;
+                            if (OnWorldVar != null) OnWorldVar(peer.Id, name, val, asHost);
+                            break;
+                        }
+
+                        case Op.WorldSync:
+                            if (OnWorldSnapshotRequest != null) OnWorldSnapshotRequest(peer.Id);
                             break;
 
                         case Op.Bye:

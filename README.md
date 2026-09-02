@@ -106,14 +106,42 @@ Balances are broadcast once a second purely so the overlay can show a scoreboard
 nothing authoritative rides on them. Coins are stored in cents (`COINS Balance` 250
 is `$2.50`).
 
-**Not yet decided:** what a guest carries home. Coins, tickets and inventory are
-clearly theirs. But `SURVIVOR_*_Unlocked_Balance` and the vehicle `*_Purchased`
-flags are the *host's island* progression, and letting a guest change those means
-joining a stranger's world permanently alters it.
+### M5 — the shared island
+
+**Decision: full progression together.** Guests can do everything — unlock areas,
+open doors, buy vehicles. So the 658 globals split in two, and the split is the
+whole design:
+
+| | |
+|---|---|
+| **Player-owned** — never crosses the wire, defended from spectating | money, tickets, chips, prizes, inventory, per-machine playcounts, health/energy/battery, passes |
+| **World-owned** — host-arbitrated, replicated to everyone | `SURVIVOR_*` (area unlocks, bunker/underground/phonebooth doors, final scene), `LOOT BOX Unlocked 1-4`, and the vehicles: golf cart, van, lambo, superkart, car 1/2 |
+
+Anyone may change world state; the change routes through the host, who applies it
+and broadcasts the result, exactly like machine ownership. A joiner asks for a full
+snapshot as soon as the handshake completes, so they arrive on the host's island
+rather than their own. Values are typed on the wire so a bool can't arrive as an int
+and silently unlock something.
+
+Detection is a half-second poll rather than a hook: unlocks get set from PlayMaker
+actions scattered right across the game, and half a second of latency on "the arcade
+is now unlocked" is imperceptible.
+
+Both lists are prefix-matched preferences (`ProtectedEconomyGlobals`,
+`SharedWorldGlobals`), so the line between yours and everyone's can be moved without
+a rebuild.
+
+### Machine registry: scanning, not a one-shot
+
+A single scan after a scene load found **14** of the 72 interactables. Most of the
+island starts deactivated — `OUTSIDE Starts OFF`, `CARNIE Starts OFF`, the arcade
+interior — and PlayMaker only registers an FSM once its GameObject has actually
+awoken, so machines appear in `FsmList` as you walk into them. The registry now
+watches the list size and rebuilds when a new district comes online.
 
 ### Still not synced
 
-Machine physics — the claw arm, the puck, the coins themselves (M5).
+Machine physics — the claw arm, the puck, the coins themselves (M6).
 
 ### Settings
 

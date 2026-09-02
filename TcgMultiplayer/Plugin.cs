@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.4.0";
+        public const string Version = "0.5.0";
 
         private static Plugin _instance;
 
@@ -34,6 +34,7 @@ namespace TcgMultiplayer
         private Overlay _overlay;
         private AvatarDirector _avatars;
         private MachineDirector _machines;
+        private WorldState _world;
         private HarmonyLib.Harmony _harmony;
         private bool _initTried;
         private float _nextInitTry;
@@ -75,9 +76,17 @@ namespace TcgMultiplayer
                 + "around every mirrored machine event, so watching someone else play can never "
                 + "pay you. Comma separated, prefix match.");
 
+            var pWorldPrefixes = cat.CreateEntry("SharedWorldGlobals", WorldState.DefaultWorldPrefixes,
+                "Shared world globals (prefixes)",
+                "The island's progression - area unlocks, doors, vehicles bought. Anyone can "
+                + "change these; the host arbitrates and everyone converges. Everything NOT "
+                + "listed here stays private to each player.");
+
             _machines = new MachineDirector(_session);
             _machines.Wallet.Configure(pWalletPrefixes.Value);
-            _overlay = new Overlay(_session, _avatars, _machines) { Visible = _pOpenOnStart.Value };
+            _world = new WorldState(_session);
+            _world.Configure(pWorldPrefixes.Value);
+            _overlay = new Overlay(_session, _avatars, _machines, _world) { Visible = _pOpenOnStart.Value };
 
             _harmony = new HarmonyLib.Harmony("com.mason.tcgmultiplayer");
             try { _machines.ApplyPatches(_harmony); }
@@ -107,6 +116,7 @@ namespace TcgMultiplayer
             _session.Tick();
             _avatars.Tick();
             _machines.Tick();
+            _world.Tick();
         }
 
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)
