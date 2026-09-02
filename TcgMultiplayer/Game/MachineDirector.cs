@@ -36,12 +36,15 @@ namespace TcgMultiplayer.Game
 
         private readonly Session _session;
         private readonly MachineRegistry _registry = new MachineRegistry();
+        public readonly WalletGuard Wallet = new WalletGuard();
 
         // Set while we're replaying a mirrored event, so it isn't re-broadcast.
         private static bool _applying;
 
         private float _nextRebuildAt;
         private bool _dirty = true;
+        private float _nextWalletAt;
+        private int _lastCoins = int.MinValue, _lastTickets = int.MinValue;
 
         public int MachineCount { get { return _registry.Count; } }
         public IEnumerable<Machine> Machines { get { return _registry.All; } }
@@ -144,6 +147,19 @@ namespace TcgMultiplayer.Game
             {
                 _dirty = false;
                 _registry.Rebuild();
+            }
+
+            // Scoreboard only — nothing authoritative rides on these numbers, so
+            // send on change and otherwise no more than once a second.
+            if (_session.State == SessionState.InLobby && Time.time >= _nextWalletAt)
+            {
+                _nextWalletAt = Time.time + 1f;
+                int c = Wallet.Coins, t = Wallet.Tickets;
+                if (c != _lastCoins || t != _lastTickets)
+                {
+                    _lastCoins = c; _lastTickets = t;
+                    _session.BroadcastWallet(c, t, Wallet.TicketsThisSession);
+                }
             }
         }
 
@@ -327,6 +343,11 @@ namespace TcgMultiplayer.Game
             PlayMakerFSM fsm;
             if (!m.Fsms.TryGetValue(fsmId, out fsm) || fsm == null) return;
 
+            // Wallets are per-player. Someone else's round must not pay us, so the
+            // economy is snapshotted around the replay and put back afterwards —
+            // which closes every payout path rather than the ones we happened to
+            // think of.
+            Wallet.Snapshot();
             try
             {
                 _applying = true;
@@ -334,7 +355,11 @@ namespace TcgMultiplayer.Game
                 MirroredEventsApplied++;
             }
             catch (Exception ex) { Plugin.Warn("Mirror apply failed on " + m.Label + ": " + ex.Message); }
-            finally { _applying = false; }
+            finally
+            {
+                _applying = false;
+                Wallet.Restore();
+            }
         }
 
         // ----------------------------------------------------------------- misc

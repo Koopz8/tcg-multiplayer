@@ -109,8 +109,11 @@ namespace TcgMultiplayer.Ui
                 {
                     GUILayout.BeginHorizontal();
                     GUILayout.Label(p.Name, _mono, GUILayout.Width(150));
-                    GUILayout.Label(p.Handshaked ? "ready" : "handshaking", _dim, GUILayout.Width(90));
-                    GUILayout.Label(p.RttMs >= 0 ? p.RttMs.ToString("0") + " ms" : "-", _mono, GUILayout.Width(60));
+                    GUILayout.Label(p.Handshaked ? "ready" : "handshaking", _dim, GUILayout.Width(74));
+                    GUILayout.Label(p.RttMs >= 0 ? p.RttMs.ToString("0") + " ms" : "-", _mono, GUILayout.Width(54));
+                    GUILayout.Label(p.HasWallet
+                        ? ("$" + (p.Coins / 100f).ToString("0.00") + "  " + p.Tickets + "t")
+                        : "-", _mono, GUILayout.Width(110));
                     GUILayout.Label(Net.SteamTransport.ConnectionState(p.Id), _dim);
                     GUILayout.EndHorizontal();
                 }
@@ -158,6 +161,24 @@ namespace TcgMultiplayer.Ui
                 if (shown == 0) GUILayout.Label("All free.", _dim);
                 GUILayout.Label("mirrored events: " + _mc.MirroredEventsSent + " sent, "
                               + _mc.MirroredEventsApplied + " applied", _dim);
+            }
+
+            // ---- wallet ---------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Your wallet", _head);
+            if (!_mc.Wallet.Available)
+            {
+                GUILayout.Label("economy globals not readable yet (load a save first)", _dim);
+            }
+            else
+            {
+                GUILayout.Label("$" + (_mc.Wallet.Coins / 100f).ToString("0.00")
+                              + "   " + _mc.Wallet.Tickets + " tickets"
+                              + "   (" + _mc.Wallet.TicketsThisSession + " this session)", _mono);
+                GUILayout.Label(_mc.Wallet.ProtectedCount + " economy globals protected"
+                              + (_mc.Wallet.RestoreCount > 0
+                                 ? "  ·  " + _mc.Wallet.RestoreCount + " payouts blocked from spectating"
+                                 : ""), _dim);
             }
 
             // ---- log ------------------------------------------------------

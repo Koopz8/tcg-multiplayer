@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.3.0";
+        public const string Version = "0.4.0";
 
         private static Plugin _instance;
 
@@ -69,7 +69,14 @@ namespace TcgMultiplayer
             _avatars.MirrorDelay = _pMirrorDelay.Value;
             RemoteAvatar.InterpDelay = Mathf.Clamp(_pInterpDelay.Value, 0.02f, 1f);
             RemoteAvatar.SpeedScale = Mathf.Clamp(_pAnimSpeedScale.Value, 0.05f, 20f);
+            var pWalletPrefixes = cat.CreateEntry("ProtectedEconomyGlobals", WalletGuard.DefaultProtectedPrefixes,
+                "Protected economy globals (prefixes)",
+                "Wallets are per-player. These PlayMaker globals are snapshotted and restored "
+                + "around every mirrored machine event, so watching someone else play can never "
+                + "pay you. Comma separated, prefix match.");
+
             _machines = new MachineDirector(_session);
+            _machines.Wallet.Configure(pWalletPrefixes.Value);
             _overlay = new Overlay(_session, _avatars, _machines) { Visible = _pOpenOnStart.Value };
 
             _harmony = new HarmonyLib.Harmony("com.mason.tcgmultiplayer");
