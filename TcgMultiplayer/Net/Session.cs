@@ -1,0 +1,385 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using Steamworks;
+
+namespace TcgMultiplayer.Net
+{
+    public enum SessionState { Offline, Creating, Joining, InLobby }
+
+    public sealed class Peer
+    {
+        public CSteamID Id;
+        public string Name = "?";
+        public string ModVersion = "";
+        public bool Handshaked;
+        public float RttMs = -1f;
+        public double LastHeardAt;
+        public long PendingPingTick;
+    }
+
+    /// <summary>
+    /// M1: get two copies of the game talking. Lobby lifecycle, a handshake, a
+    /// ping/pong round-trip and a chat line. No gameplay state crosses the wire
+    /// yet — the point is to prove the transport in isolation.
+    /// </summary>
+    public sealed class Session
+    {
+        public const string LobbyKeyMod = "tcgmp_version";
+        public const string LobbyKeyHost = "tcgmp_host";
+
+        public SessionState State { get; private set; }
+        public CSteamID Lobby { get; private set; }
+        public bool IsHost { get; private set; }
+        public CSteamID SelfId { get; private set; }
+        public string SelfName { get; private set; }
+
+        public readonly List<Peer> Peers = new List<Peer>();
+        public readonly List<string> Chat = new List<string>();
+
+        private Callback<LobbyEnter_t> _cbLobbyEnter;
+        private Callback<LobbyChatUpdate_t> _cbLobbyChat;
+        private Callback<GameLobbyJoinRequested_t> _cbJoinRequested;
+        private Callback<SteamNetworkingMessagesSessionRequest_t> _cbSessionRequest;
+        private Callback<SteamNetworkingMessagesSessionFailed_t> _cbSessionFailed;
+        private CallResult<LobbyCreated_t> _crLobbyCreated;
+
+        private readonly List<SteamTransport.Received> _inbox = new List<SteamTransport.Received>();
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private double _nextPingAt;
+
+        public bool Ready { get; private set; }
+
+        // ---------------------------------------------------------------- setup
+
+        public bool Init()
+        {
+            if (!SteamBridge.Initialized)
+            {
+                Plugin.Warn("Steam is not initialised yet — will retry.");
+                return false;
+            }
+
+            try
+            {
+                SelfId = SteamUser.GetSteamID();
+                SelfName = SteamFriends.GetPersonaName();
+
+                _cbLobbyEnter = Callback<LobbyEnter_t>.Create(OnLobbyEnter);
+                _cbLobbyChat = Callback<LobbyChatUpdate_t>.Create(OnLobbyChatUpdate);
+                _cbJoinRequested = Callback<GameLobbyJoinRequested_t>.Create(OnJoinRequested);
+                _cbSessionRequest = Callback<SteamNetworkingMessagesSessionRequest_t>.Create(OnSessionRequest);
+                _cbSessionFailed = Callback<SteamNetworkingMessagesSessionFailed_t>.Create(OnSessionFailed);
+                _crLobbyCreated = CallResult<LobbyCreated_t>.Create(OnLobbyCreated);
+
+                Ready = true;
+                Plugin.Log("Steam ready as " + SelfName + " (" + SelfId.m_SteamID + ")");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Warn("Steam init failed: " + ex);
+                return false;
+            }
+        }
+
+        // ------------------------------------------------------------- commands
+
+        public void Host(int maxPlayers)
+        {
+            if (!Ready || State != SessionState.Offline) return;
+            State = SessionState.Creating;
+            IsHost = true;
+            Log("Creating lobby...");
+            var call = SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, maxPlayers);
+            _crLobbyCreated.Set(call);
+        }
+
+        public void Join(CSteamID lobby)
+        {
+            if (!Ready || State != SessionState.Offline) return;
+            State = SessionState.Joining;
+            IsHost = false;
+            Log("Joining lobby " + lobby.m_SteamID + "...");
+            SteamMatchmaking.JoinLobby(lobby);
+        }
+
+        public void Leave()
+        {
+            if (State == SessionState.Offline) return;
+            foreach (var p in Peers)
+            {
+                Send(p, Op.Bye, null);
+                SteamTransport.CloseSession(p.Id);
+            }
+            Peers.Clear();
+            if (Lobby.IsValid()) SteamMatchmaking.LeaveLobby(Lobby);
+            Lobby = default(CSteamID);
+            State = SessionState.Offline;
+            IsHost = false;
+            Log("Left the session.");
+        }
+
+        public void OpenInviteOverlay()
+        {
+            if (State != SessionState.InLobby) return;
+            SteamFriends.ActivateGameOverlayInviteDialog(Lobby);
+        }
+
+        public void SendChat(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            Log(SelfName + ": " + text);
+            foreach (var p in Peers)
+                Send(p, Op.Chat, w => w.Str(text));
+        }
+
+        // ---------------------------------------------------------------- pump
+
+        public void Tick()
+        {
+            if (!Ready || State == SessionState.Offline) return;
+
+            _inbox.Clear();
+            SteamTransport.Poll(SteamTransport.ChannelControl, _inbox);
+            SteamTransport.Poll(SteamTransport.ChannelPing, _inbox);
+            for (int i = 0; i < _inbox.Count; i++) Handle(_inbox[i]);
+
+            var now = _clock.Elapsed.TotalSeconds;
+            if (now >= _nextPingAt)
+            {
+                _nextPingAt = now + 1.0;
+                var tick = _clock.ElapsedTicks;
+                foreach (var p in Peers)
+                {
+                    p.PendingPingTick = tick;
+                    SendOn(p, Op.Ping, SteamTransport.ChannelPing, false, w => w.I64(tick));
+                }
+            }
+        }
+
+        // ------------------------------------------------------------ callbacks
+
+        private void OnLobbyCreated(LobbyCreated_t cb, bool ioFailure)
+        {
+            if (ioFailure || cb.m_eResult != EResult.k_EResultOK)
+            {
+                Log("Lobby creation failed: " + (ioFailure ? "IO failure" : cb.m_eResult.ToString()));
+                State = SessionState.Offline;
+                IsHost = false;
+                return;
+            }
+            Lobby = new CSteamID(cb.m_ulSteamIDLobby);
+            SteamMatchmaking.SetLobbyData(Lobby, LobbyKeyMod, Plugin.Version);
+            SteamMatchmaking.SetLobbyData(Lobby, LobbyKeyHost, SelfName);
+            SteamMatchmaking.SetLobbyJoinable(Lobby, true);
+            // LobbyEnter also fires for the creator, so peer setup happens there.
+        }
+
+        private void OnLobbyEnter(LobbyEnter_t cb)
+        {
+            Lobby = new CSteamID(cb.m_ulSteamIDLobby);
+            State = SessionState.InLobby;
+            IsHost = SteamMatchmaking.GetLobbyOwner(Lobby) == SelfId;
+
+            var hostVersion = SteamMatchmaking.GetLobbyData(Lobby, LobbyKeyMod);
+            if (!string.IsNullOrEmpty(hostVersion) && hostVersion != Plugin.Version)
+                Log("WARNING: host runs TcgMultiplayer " + hostVersion + ", you run " + Plugin.Version);
+
+            Log("In lobby " + Lobby.m_SteamID + (IsHost ? " (host)" : " (client)"));
+            RefreshPeers();
+            foreach (var p in Peers) SendHello(p);
+        }
+
+        private void OnLobbyChatUpdate(LobbyChatUpdate_t cb)
+        {
+            if (new CSteamID(cb.m_ulSteamIDLobby) != Lobby) return;
+            var who = new CSteamID(cb.m_ulSteamIDUserChanged);
+
+            const uint entered = 1;   // k_EChatMemberStateChangeEntered
+            if ((cb.m_rgfChatMemberStateChange & entered) != 0)
+            {
+                var p = Track(who);
+                if (p != null) { Log(p.Name + " joined."); SendHello(p); }
+            }
+            else
+            {
+                var p = Find(who);
+                if (p != null)
+                {
+                    Log(p.Name + " left.");
+                    SteamTransport.CloseSession(p.Id);
+                    Peers.Remove(p);
+                }
+            }
+            IsHost = SteamMatchmaking.GetLobbyOwner(Lobby) == SelfId;
+        }
+
+        private void OnJoinRequested(GameLobbyJoinRequested_t cb)
+        {
+            Log("Join request from " + SteamFriends.GetFriendPersonaName(cb.m_steamIDFriend));
+            if (State != SessionState.Offline) Leave();
+            Join(cb.m_steamIDLobby);
+        }
+
+        private void OnSessionRequest(SteamNetworkingMessagesSessionRequest_t cb)
+        {
+            var peer = cb.m_identityRemote.GetSteamID();
+            // Only talk to people who are actually in our lobby.
+            if (Find(peer) == null && !IsLobbyMember(peer))
+            {
+                Plugin.Warn("Refused session from non-member " + peer.m_SteamID);
+                return;
+            }
+            SteamTransport.AcceptSession(peer);
+            Track(peer);
+        }
+
+        private void OnSessionFailed(SteamNetworkingMessagesSessionFailed_t cb)
+        {
+            var peer = cb.m_info.m_identityRemote.GetSteamID();
+            Log("Session failed with " + NameOf(peer) + ": " + cb.m_info.m_eEndReason);
+        }
+
+        // ------------------------------------------------------------- messages
+
+        private void Handle(SteamTransport.Received r)
+        {
+            var peer = Track(r.From);
+            if (peer == null) return;
+            peer.LastHeardAt = _clock.Elapsed.TotalSeconds;
+
+            try
+            {
+                using (var pr = new PacketReader(r.Data))
+                {
+                    switch (pr.Op)
+                    {
+                        case Op.Hello:
+                            peer.Name = pr.Str();
+                            peer.ModVersion = pr.Str();
+                            peer.Handshaked = true;
+                            Log("Handshake with " + peer.Name + " (mod " + peer.ModVersion + ")");
+                            SendOn(peer, Op.HelloAck, SteamTransport.ChannelControl, true,
+                                   w => w.Str(SelfName).Str(Plugin.Version));
+                            break;
+
+                        case Op.HelloAck:
+                            peer.Name = pr.Str();
+                            peer.ModVersion = pr.Str();
+                            peer.Handshaked = true;
+                            Log("Connected to " + peer.Name + " (mod " + peer.ModVersion + ")");
+                            break;
+
+                        case Op.Ping:
+                        {
+                            long tick = pr.I64();
+                            SendOn(peer, Op.Pong, SteamTransport.ChannelPing, false, w => w.I64(tick));
+                            break;
+                        }
+
+                        case Op.Pong:
+                        {
+                            long tick = pr.I64();
+                            if (tick == peer.PendingPingTick)
+                            {
+                                double ms = (_clock.ElapsedTicks - tick) * 1000.0 / Stopwatch.Frequency;
+                                peer.RttMs = peer.RttMs < 0 ? (float)ms : peer.RttMs * 0.7f + (float)ms * 0.3f;
+                            }
+                            break;
+                        }
+
+                        case Op.Chat:
+                            Log(peer.Name + ": " + pr.Str());
+                            break;
+
+                        case Op.Bye:
+                            Log(peer.Name + " disconnected.");
+                            SteamTransport.CloseSession(peer.Id);
+                            Peers.Remove(peer);
+                            break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Warn("Malformed packet from " + peer.Name + ": " + ex.Message);
+            }
+        }
+
+        private void SendHello(Peer p)
+        {
+            SteamTransport.AcceptSession(p.Id);
+            SendOn(p, Op.Hello, SteamTransport.ChannelControl, true,
+                   w => w.Str(SelfName).Str(Plugin.Version));
+        }
+
+        private void Send(Peer p, Op op, Action<PacketWriter> fill)
+        {
+            SendOn(p, op, SteamTransport.ChannelControl, true, fill);
+        }
+
+        private void SendOn(Peer p, Op op, int channel, bool reliable, Action<PacketWriter> fill)
+        {
+            using (var w = new PacketWriter(op))
+            {
+                if (fill != null) fill(w);
+                SteamTransport.Send(p.Id, w.ToArray(), channel, reliable);
+            }
+        }
+
+        // --------------------------------------------------------------- peers
+
+        private void RefreshPeers()
+        {
+            int n = SteamMatchmaking.GetNumLobbyMembers(Lobby);
+            for (int i = 0; i < n; i++)
+            {
+                var m = SteamMatchmaking.GetLobbyMemberByIndex(Lobby, i);
+                if (m != SelfId) Track(m);
+            }
+        }
+
+        private bool IsLobbyMember(CSteamID who)
+        {
+            if (!Lobby.IsValid()) return false;
+            int n = SteamMatchmaking.GetNumLobbyMembers(Lobby);
+            for (int i = 0; i < n; i++)
+                if (SteamMatchmaking.GetLobbyMemberByIndex(Lobby, i) == who) return true;
+            return false;
+        }
+
+        private Peer Find(CSteamID id)
+        {
+            for (int i = 0; i < Peers.Count; i++) if (Peers[i].Id == id) return Peers[i];
+            return null;
+        }
+
+        private Peer Track(CSteamID id)
+        {
+            if (id == SelfId || !id.IsValid()) return null;
+            var p = Find(id);
+            if (p != null) return p;
+            p = new Peer { Id = id, Name = NameOf(id), LastHeardAt = _clock.Elapsed.TotalSeconds };
+            Peers.Add(p);
+            return p;
+        }
+
+        private static string NameOf(CSteamID id)
+        {
+            try
+            {
+                var n = SteamFriends.GetFriendPersonaName(id);
+                return string.IsNullOrEmpty(n) ? id.m_SteamID.ToString() : n;
+            }
+            catch { return id.m_SteamID.ToString(); }
+        }
+
+        private void Log(string line)
+        {
+            Chat.Add(line);
+            if (Chat.Count > 200) Chat.RemoveRange(0, Chat.Count - 200);
+            Plugin.Log(line);
+        }
+    }
+}

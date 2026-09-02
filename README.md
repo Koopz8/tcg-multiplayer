@@ -1,125 +1,120 @@
-# TcgFsmDump
+# tcg-multiplayer
 
-M0 of the Coin Game multiplayer project. Two jobs:
+Multiplayer for **The Coin Game** (Steam app 598980). Two MelonLoader mods:
 
-1. **Dump** every PlayMaker FSM graph in the loaded scene to JSON — owner object,
-   hierarchy path, candidate NetId, states, transitions, actions, events, variables.
-2. **Trace** which of those events and states actually fire while you play, so you
-   can tell the handful that matter from the thousands that don't.
+| Mod | Purpose |
+|-----|---------|
+| **TcgFsmDump** | M0 — dumps every PlayMaker FSM graph to JSON and traces which events fire while you play. A research tool; keep it around. |
+| **TcgMultiplayer** | The mod itself. M1: Steam lobby, peer transport, handshake, ping and chat. |
 
-Nothing in here changes the game. It reads and writes files.
+Target: Unity **2022.3.62f3**, Mono x64, game build `22761496`.
+Loader: **MelonLoader 0.6.6** (HarmonyX 2.10.2).
 
 ---
 
 ## Install
 
-1. Install **MelonLoader** (the automated installer is easiest) and point it at
-   `Steam\steamapps\common\TheCoinGame\TheCoinGame.exe`. Use MelonLoader 0.6.x.
-2. Run the game once so MelonLoader creates its folders, then quit.
-3. Drop `TcgFsmDump.dll` into `TheCoinGame\Mods\`.
-4. Launch. The MelonLoader console should print:
+Drop the built `.dll`s into `TheCoinGame\Mods\`. Both can run at once.
 
-   ```
-   [TcgFsmDump] Ready. F7 = dump scene, F8 = toggle live trace.
-   [TcgFsmDump] Output folder: ...\TheCoinGame\TcgFsmDump
-   ```
+## TcgMultiplayer (M1)
 
-If MelonLoader's console window is hidden, open
-`TheCoinGame\MelonLoader\Latest.log` instead.
+Press **F9** for the overlay.
 
-## Use
+- **Host** — creates a friends-only Steam lobby
+- **Invite friend** — opens Steam's invite dialog
+- **Join by lobby ID** — paste a lobby ID if you'd rather not use the overlay
+- Accepting a Steam invite works whether the game is running (`GameLobbyJoinRequested`)
+  or closed (`+connect_lobby` on the command line)
 
-| Key | What it does |
-|-----|--------------|
-| **F7** | Dump the currently loaded scene right now |
-| **F8** | Start / stop the live event trace |
+The panel shows each peer's name, handshake state, **round-trip time in ms**, and
+the raw Steam connection state. The chat box is there to prove bytes move both
+ways — type, hit Enter, watch it land on the other machine.
 
-A dump is also written automatically ~6 seconds after every scene load, so just
-launching into the island gives you one without touching anything.
+### What it does not do yet
 
-Everything lands in `TheCoinGame\TcgFsmDump\`:
+Nothing about the game is synced. No avatars, no machines, no economy. M1 exists
+to prove the transport in isolation, because that's the piece that's hardest to
+debug once gameplay is layered on top.
 
-- `fsm_<scene>_<timestamp>.json` — the full graph dump
-- `fsm_<scene>_<timestamp>.summary.txt` — read this first: counts, and the most
-  common FSM names, event names, state names and variable names
-- `trace_<timestamp>.log` — tab-separated: `time, frame, kind, fsmPath|fsmName, detail`
+### Testing it
 
-### The workflow that actually matters
-
-1. Load into the island, let the auto-dump run.
-2. Open the `.summary.txt`. That's your map.
-3. Walk up to one arcade machine. Press **F8**, play one round, press **F8** again.
-4. Open the trace log. What you're looking at is the complete set of FSM events
-   and state changes that one machine needs in order to be replicated. That list
-   is usually short — often a dozen events — and that is the real finding.
-
-Repeat step 3 per machine. Each trace becomes one machine adapter later.
+You need **two machines and two Steam accounts** — Steam only runs one instance of
+a game per account, so this can't be tested solo on one PC. Solo you can still
+confirm: the overlay opens, Steam initialises, Host succeeds, a lobby ID appears,
+and the invite dialog opens.
 
 ### Settings
 
-`TheCoinGame\UserData\MelonPreferences.cfg`, section `[TcgFsmDump]`:
+`UserData\MelonPreferences.cfg`, section `[TcgMultiplayer]`:
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `DumpActions` | `true` | Lists PlayMaker action types per state. Forces PlayMaker's lazy action load — set `false` if a dump ever destabilises a scene. |
-| `DumpVariableValues` | `true` | Records current values, not just names and types. |
-| `IncludeInactive` | `true` | Also sweeps FSMs on disabled objects, which PlayMaker's own list skips. |
-| `AutoDumpOnSceneLoad` | `true` | |
-| `AutoDumpDelaySeconds` | `6` | Raise it if the island is still streaming in when the dump fires. |
-| `TraceStates` | `true` | Log state entries as well as events. |
-| `TraceSystemEvents` | `false` | UPDATE / FIXED_UPDATE / etc. Floods the log. |
-| `MutedEvents` | *(empty)* | Comma-separated event names to drop once you know they're noise. |
-| `DumpKey` / `TraceKey` | `F7` / `F8` | Any `KeyCode` name. |
+| `ToggleKey` | `F9` | Any `KeyCode` name. |
+| `MaxPlayers` | `4` | 2–8. The bandwidth model is designed around 4. |
+| `OpenOverlayOnStart` | `true` | |
+| `SuppressGameInputWhileOpen` | `true` | Disables Rewired input maps so chat typing doesn't also drive the player. |
+
+### Design notes
+
+**Steam is the game's, not ours.** `HLG.Runtime.dll` ships Steamworks.NET's
+`SteamManager`, which already calls `SteamAPI.Init()` and pumps
+`SteamAPI.RunCallbacks()` every frame. The mod must not do either — it would
+double-dispatch every callback in the game. `SteamBridge` just waits on
+`SteamManager.Initialized`, read by reflection so there's no hard reference to
+HLG.Runtime.
+
+**Transport is `SteamNetworkingMessages`**, which hands us NAT traversal, relay
+fallback and authenticated identity for nothing. Channel 0 is reliable control,
+channel 1 is unreliable for ping. Sessions are only accepted from peers who are
+actually in our lobby.
+
+**The cursor has to be taken by force.** The M0 trace caught an FSM re-issuing
+`Cursor LOCKED` roughly 40 times a second, so a one-shot unlock loses. The overlay
+reasserts `CursorLockMode.None` in `OnGUI`, which runs after every `Update`.
+
+**Input suppression borrows the game's own move.** `ControllerDisconnectView` calls
+`SetAllMapsEnabled(false)` on the Rewired player when it needs to steal input;
+`InputLock` does the same by reflection. That is also the groundwork for M2, where
+remote avatars have to be cut off from local input entirely.
 
 ---
 
-## One thing this is meant to settle
+## TcgFsmDump (M0)
 
-The plan assumed `ES2UniqueID` could serve as the network object registry. Reading
-its source says otherwise — the id is handed out in `Awake` order
-(`uniqueIDList[last].id + 1`), not baked into the scene, so it is not guaranteed
-to agree across two machines.
+**F7** dumps the loaded scene, **F8** toggles the live trace. A dump also runs
+automatically ~6 s after each scene load. Output goes to `TheCoinGame\TcgFsmDump\`:
 
-So the dump records **both** `es2UniqueId` and a `pathHash` (FNV-1a 32 of the full
-hierarchy path). Run the dump on two different machines on the same save and diff
-the two JSON files:
+- `fsm_<scene>_<ts>.json` — full graph dump
+- `fsm_<scene>_<ts>.summary.txt` — read this first
+- `trace_<ts>.log` — `time, frame, kind, fsmPath|fsmName, detail`
 
-- if `pathHash` matches everywhere, hierarchy path is the NetId scheme
-- if `es2UniqueId` also matches everywhere, it's a usable fast lookup on top
-- `Path-hash collisions` in the summary must read `0`; if not, the NetId needs to
-  be 64-bit
+The workflow that matters: load in, walk to a machine, **F8**, play one round,
+**F8**. The trace is the event shortlist for that machine.
 
-That comparison is the actual deliverable of M0.
+Settings live under `[TcgFsmDump]`; `MutedEvents` is worth filling in as you learn
+which events are just per-frame noise.
+
+### What M0 established
+
+- **NetId = FNV-1a 32 of the hierarchy path.** 0 collisions across 4,533 FSMs.
+  `ES2UniqueID` is on 0 of them and is not usable.
+- **`Coin Machine Canvas CNTLR`** — one FSM type, 72 instances, on every machine,
+  ride, booth, vending unit and vehicle. Its `Card Inserted` / `Card Removed` /
+  `FREEZE MACHINE` states are the game's own occupancy model.
+- **`WorldUI_Prize FSM`** — 102 instances, the single chokepoint for every purchase.
+- Worst rigidbody count is 100 (Claw Machine Balls); coin pushers are 63–66 coins each.
+- 2,356 graphs are named just `FSM`, so adapters must key on **path pattern**, not name.
 
 ---
 
 ## Building
 
-Needs the .NET SDK. Copy these out of `TheCoinGame\TheCoinGame_Data\Managed\`
-into `TcgFsmDump\libs\`:
+Needs the .NET SDK. Copy the game assemblies each project's `libs\README.txt`
+lists out of `TheCoinGame\TheCoinGame_Data\Managed\`, then:
 
 ```
-PlayMaker.dll
-UnityEngine.dll
-UnityEngine.CoreModule.dll
-UnityEngine.PhysicsModule.dll
-UnityEngine.AnimationModule.dll
-UnityEngine.InputLegacyModule.dll
+dotnet build -c Release TcgFsmDump\TcgFsmDump.csproj
+dotnet build -c Release TcgMultiplayer\TcgMultiplayer.csproj
 ```
 
-Then:
-
-```
-dotnet build -c Release
-```
-
-Output is `bin\Release\TcgFsmDump.dll`. MelonLoader and HarmonyX come from NuGet;
-nothing is bundled into the mod.
-
-## Target build
-
-Written against **Unity 2022.3.62f3, Mono x64**, The Coin Game build `22761496`.
-No hard reference to `Assembly-CSharp` — `ES2UniqueID` is reached by reflection —
-so a game patch should not break this outright. If PlayMaker itself is upgraded,
-the two Harmony patches (`Fsm.ProcessEvent`, `FsmState.OnEnter`) will log a warning
-and disable themselves rather than crash.
+MelonLoader and HarmonyX come from NuGet. Nothing is bundled into either mod.
