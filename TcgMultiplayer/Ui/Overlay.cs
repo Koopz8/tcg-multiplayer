@@ -252,6 +252,16 @@ namespace TcgMultiplayer.Ui
             GUILayout.Label("Backup: " + SaveGuard.Status, _dim);
             if (GUILayout.Button("Back up my save now", GUILayout.Height(22))) SaveGuard.Backup();
 
+            // ---- performance ------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Performance", _head);
+            GUILayout.Label(Perf.Summary, _mono);
+            GUILayout.Label(Perf.ModCostLine, _dim);
+            foreach (var b in Perf.Breakdown) GUILayout.Label(b, _dim);
+            if (Perf.WorstMs > 100f)
+                GUILayout.Label("Worst frame over 100 ms — that's a visible hitch. If the breakdown "
+                              + "above is near zero, it isn't this mod.", _dim);
+
             // ---- health ---------------------------------------------------
             GUILayout.Space(6);
             GUILayout.Label("Health", _head);

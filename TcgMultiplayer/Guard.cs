@@ -40,12 +40,19 @@ namespace TcgMultiplayer
             return s;
         }
 
-        /// <summary>Runs <paramref name="body"/>, absorbing anything it throws.</summary>
+        private static readonly System.Diagnostics.Stopwatch _watch = new System.Diagnostics.Stopwatch();
+
+        /// <summary>
+        /// Runs <paramref name="body"/>, absorbing anything it throws and timing
+        /// it on the way past. Everything per-frame already comes through here,
+        /// so this is the cheapest honest place to measure what the mod costs.
+        /// </summary>
         public static void Run(string name, Action body)
         {
             var slot = Get(name);
             if (slot.Disabled) return;
 
+            long start = _watch.IsRunning ? _watch.ElapsedTicks : Restart();
             try { body(); }
             catch (Exception ex)
             {
@@ -64,6 +71,17 @@ namespace TcgMultiplayer
                                 + "Last error: " + slot.LastError);
                 }
             }
+            finally
+            {
+                Perf.Record(name, (float)((_watch.ElapsedTicks - start) * 1000.0
+                                          / System.Diagnostics.Stopwatch.Frequency));
+            }
+        }
+
+        private static long Restart()
+        {
+            _watch.Start();
+            return _watch.ElapsedTicks;
         }
 
         public static bool IsDisabled(string name)
