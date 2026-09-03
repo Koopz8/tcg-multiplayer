@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.9.0";
+        public const string Version = "0.9.1";
 
         private static Plugin _instance;
 
@@ -137,58 +137,77 @@ namespace TcgMultiplayer
             try { StatsLock.Apply(_harmony); }
             catch (Exception ex) { Warn("Stats lock failed: " + ex); }
 
+            BuildTickDelegates();
             CompatCheck.ComputeGameHash();
 
             Log("Loaded. " + ToggleKeyName + " toggles the overlay, "
                 + (_pPanicKey != null ? _pPanicKey.Value : "F11") + " releases every machine.");
         }
 
+        // Delegates are built once, not per frame. `Guard.Run("net", () => ...)`
+        // reads nicely but allocates a fresh closure on every call — seven of
+        // them a frame, four hundred a second, in a game already leaning on
+        // Unity's incremental collector. Cached here they cost nothing.
+        private Action _doInput, _doNet, _doAvatars, _doMachines, _doWorld,
+                       _doHealth, _doScene, _doNameplates, _doOverlay;
+
+        private void BuildTickDelegates()
+        {
+            _doInput = TickInput;
+            _doNet = () => _session.Tick();
+            _doAvatars = () => _avatars.Tick();
+            _doMachines = () => _machines.Tick();
+            _doWorld = () => _world.Tick();
+            _doHealth = CompatCheck.ReportOnce;
+            _doScene = () => { _avatars.OnSceneChanged(); _machines.OnSceneChanged(); };
+            _doNameplates = () => { if (_overlay.Visible) FreeCursor(); _avatars.DrawNameplates(); };
+            _doOverlay = () => _overlay.Draw();
+        }
+
+        private void TickInput()
+        {
+            // Steam belongs to the game; wait for its SteamManager rather than
+            // initialising anything ourselves.
+            if (!_session.Ready && Time.realtimeSinceStartup >= _nextInitTry)
+            {
+                _nextInitTry = Time.realtimeSinceStartup + 2f;
+                if (_session.Init()) TryLaunchLobby();
+                else if (!_initTried) { _initTried = true; }
+            }
+
+            if (Hotkeys.Down(ToggleKeyName))
+            {
+                _overlay.Visible = !_overlay.Visible;
+                ApplyInputLock();
+            }
+
+            if (Hotkeys.Down(_pPanicKey != null ? _pPanicKey.Value : "F11"))
+                _machines.ReleaseEverything();
+
+            if (_overlay.Visible) FreeCursor();
+        }
+
         // Everything below runs every frame, and nothing above us catches what it
         // throws. Each subsystem is isolated so one of them failing costs that
-        // feature rather than the player's game. See Guard.
+        // feature rather than the player's game, and timed so the cost is visible.
         public override void OnUpdate()
         {
-            Guard.Run("input", () =>
-            {
-                // Steam belongs to the game; wait for its SteamManager rather than
-                // initialising anything ourselves.
-                if (!_session.Ready && Time.realtimeSinceStartup >= _nextInitTry)
-                {
-                    _nextInitTry = Time.realtimeSinceStartup + 2f;
-                    if (_session.Init()) TryLaunchLobby();
-                    else if (!_initTried) { _initTried = true; }
-                }
+            Guard.Run("input", _doInput);
+            Guard.Run("networking", _doNet);
+            Guard.Run("player bodies", _doAvatars);
+            Guard.Run("machines", _doMachines);
+            Guard.Run("world state", _doWorld);
 
-                if (Hotkeys.Down(ToggleKeyName))
-                {
-                    _overlay.Visible = !_overlay.Visible;
-                    ApplyInputLock();
-                }
+            if (Time.frameCount % 600 == 0) Guard.Run("health check", _doHealth);
 
-                if (Hotkeys.Down(_pPanicKey != null ? _pPanicKey.Value : "F11"))
-                    _machines.ReleaseEverything();
-
-                if (_overlay.Visible) FreeCursor();
-            });
-
-            Guard.Run("networking", () => _session.Tick());
-            Guard.Run("player bodies", () => _avatars.Tick());
-            Guard.Run("machines", () => _machines.Tick());
-            Guard.Run("world state", () => _world.Tick());
-
-            if (Time.frameCount % 600 == 0)
-                Guard.Run("health check", () => CompatCheck.ReportOnce());
+            Perf.EndFrame();
         }
 
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)
         {
             // Scenes load additively and PLAYER is rebuilt, so every cached
             // transform and every cloned body is stale from here.
-            Guard.Run("scene change", () =>
-            {
-                _avatars.OnSceneChanged();
-                _machines.OnSceneChanged();
-            });
+            Guard.Run("scene change", _doScene);
         }
 
         public override void OnGUI()
@@ -200,12 +219,8 @@ namespace TcgMultiplayer
             // Guarded separately from the overlay: an exception thrown out of OnGUI
             // lands in the middle of Unity's own IMGUI pass, and taking the game's
             // UI down with us is not an acceptable way to fail.
-            Guard.Run("nameplates", () =>
-            {
-                if (_overlay.Visible) FreeCursor();
-                _avatars.DrawNameplates();
-            });
-            Guard.Run("overlay", () => _overlay.Draw());
+            Guard.Run("nameplates", _doNameplates);
+            Guard.Run("overlay", _doOverlay);
         }
 
         private static void FreeCursor()

@@ -123,6 +123,13 @@ namespace TcgMultiplayer.Game
 
             foreach (var f in Directory.GetFiles(src))
             {
+                // Player.log is open with a write lock the whole time the game is
+                // running, so copying it throws — and it is a log, not save data.
+                // Skipping it is the difference between a clean backup and a
+                // warning on every single session.
+                var ext = Path.GetExtension(f);
+                if (string.Equals(ext, ".log", StringComparison.OrdinalIgnoreCase)) continue;
+
                 try
                 {
                     File.Copy(f, Path.Combine(dest, Path.GetFileName(f)), true);

@@ -44,6 +44,11 @@ namespace TcgMultiplayer.Game
         private static bool _applying;
 
         private float _nextRebuildAt;
+        private float _lastRebuildAt = -999f;
+        private int _pendingFsmCount = -1;
+
+        /// <summary>Never walk the whole FSM list more often than this.</summary>
+        private const float MinRebuildInterval = 8f;
         private bool _dirty = true;
         private float _nextWalletAt;
         private int _lastCoins = int.MinValue, _lastTickets = int.MinValue;
@@ -175,15 +180,41 @@ namespace TcgMultiplayer.Game
             // registers an FSM once its GameObject has actually awoken — so
             // machines appear in FsmList as you walk into them. Watching the list
             // size is a cheap way to notice a new district coming online.
+            // ...but the count is noisy in a way the first version didn't allow
+            // for. Coin pushers spawn and despawn COIN FSMs in batches — there
+            // are 195 of them in the arcade alone — so a busy machine trips a
+            // 32-FSM threshold every two seconds, and each trip walks all ~4,500
+            // FSMs twice. That is a hitch you can feel, caused entirely by
+            // watching for something that hasn't happened.
+            //
+            // So the count has to settle before it counts: two consecutive
+            // samples that agree with each other, and a floor between rebuilds.
+            // A district coming online is a step change that stays; coins are
+            // churn that doesn't.
             if (Time.time >= _nextScanCheckAt)
             {
                 _nextScanCheckAt = Time.time + 2f;
                 int n = FsmListCount();
-                if (_lastFsmListCount < 0 || Mathf.Abs(n - _lastFsmListCount) > 32)
+
+                if (_lastFsmListCount < 0)
                 {
                     _lastFsmListCount = n;
                     _registry.Rebuild();
+                    _lastRebuildAt = Time.time;
                 }
+                else if (Mathf.Abs(n - _lastFsmListCount) > 32)
+                {
+                    bool settled = Mathf.Abs(n - _pendingFsmCount) <= 32;
+                    _pendingFsmCount = n;
+
+                    if (settled && Time.time - _lastRebuildAt >= MinRebuildInterval)
+                    {
+                        _lastFsmListCount = n;
+                        _lastRebuildAt = Time.time;
+                        _registry.Rebuild();
+                    }
+                }
+                else _pendingFsmCount = n;
             }
 
             // Belt and braces: if anything ever leaves a machine owned by the fake

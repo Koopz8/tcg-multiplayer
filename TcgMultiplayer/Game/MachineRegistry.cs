@@ -62,6 +62,7 @@ namespace TcgMultiplayer.Game
         private readonly Dictionary<int, Machine> _byFsmInstance = new Dictionary<int, Machine>();
         private readonly Dictionary<int, uint> _fsmIdByInstance = new Dictionary<int, uint>();
         private readonly Dictionary<Transform, Machine> _byRoot = new Dictionary<Transform, Machine>();
+        private readonly List<PlayMakerFSM> _all = new List<PlayMakerFSM>(6000);
 
         public int Count { get { return _byId.Count; } }
         public IEnumerable<Machine> All { get { return _byId.Values; } }
@@ -95,9 +96,13 @@ namespace TcgMultiplayer.Game
         {
             Clear();
 
-            List<PlayMakerFSM> all;
-            try { all = new List<PlayMakerFSM>(PlayMakerFSM.FsmList); }
+            // Reused across rebuilds rather than reallocated. In the arcade this
+            // list holds ~4,500 entries, and a fresh one each time is 4,500
+            // references of pure garbage handed to the collector for nothing.
+            _all.Clear();
+            try { _all.AddRange(PlayMakerFSM.FsmList); }
             catch (Exception ex) { Plugin.Warn("Could not read FsmList: " + ex.Message); return 0; }
+            var all = _all;
 
             // Pass 1: every controller becomes a machine, rooted at its parent.
             foreach (var fsm in all)
