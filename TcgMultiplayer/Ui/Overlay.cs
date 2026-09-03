@@ -256,6 +256,15 @@ namespace TcgMultiplayer.Ui
                               + "Money, tickets, prizes and inventory stay yours.", _dim);
             }
 
+            // ---- health ---------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Health", _head);
+            GUILayout.Label("build " + (CompatCheck.GameHash ?? "?") + "  ·  " + CompatCheck.Summary, _mono);
+            foreach (var c in CompatCheck.Items)
+                if (!c.Ok) GUILayout.Label("   MISSING: " + c.What
+                                           + (string.IsNullOrEmpty(c.Detail) ? "" : " — " + c.Detail), _dim);
+            GUILayout.Label("Steam stats: " + StatsLock.Status, _dim);
+
             // ---- log ------------------------------------------------------
             GUILayout.Space(6);
             GUILayout.Label("Log", _head);

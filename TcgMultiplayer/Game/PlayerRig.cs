@@ -59,6 +59,9 @@ namespace TcgMultiplayer.Game
             _lastPosTime = Time.time;
             _lastYaw = Mesh.eulerAngles.y;
             Plugin.Log("Player rig acquired" + (_controller != null ? " (with movement controller)" : " (transform only)"));
+            CompatCheck.Set("player rig (" + RootPath + "/" + MeshChild + ")", true, null);
+            CompatCheck.Set("movement controller", _controller != null,
+                            _controller == null ? "falling back to transform deltas" : null);
             return true;
         }
 

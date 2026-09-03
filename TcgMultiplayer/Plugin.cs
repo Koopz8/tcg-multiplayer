@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.7.0";
+        public const string Version = "0.8.0";
 
         private static Plugin _instance;
 
@@ -27,6 +27,7 @@ namespace TcgMultiplayer
         private static MelonPreferences_Entry<float> _pMirrorDelay;
         private static MelonPreferences_Entry<float> _pAnimSpeedScale;
         private static MelonPreferences_Entry<string> _pPanicKey;
+        private static MelonPreferences_Entry<bool> _pLockStats;
 
         public static int MaxPlayers { get { return _pMaxPlayers != null ? Mathf.Clamp(_pMaxPlayers.Value, 2, 8) : 4; } }
         public static string ToggleKeyName { get { return _pToggleKey != null ? _pToggleKey.Value : "F9"; } }
@@ -61,6 +62,10 @@ namespace TcgMultiplayer
             _pMirrorDelay = cat.CreateEntry("MirrorDelaySeconds", 1.5f, "Mirror delay (s)",
                 "Solo test mode: how far behind you the mirrored ghost walks.");
 
+            _pLockStats = cat.CreateEntry("BlockSteamStatsInSession", true,
+                "Block Steam achievements and leaderboards during a session",
+                "Strongly recommended. Spectating replays a friend's round on your machine, so "
+                + "without this their win can post to your leaderboard. Single player is unaffected.");
             _pPanicKey = cat.CreateEntry("ReleaseEverythingKey", "F11", "Release-everything key",
                 "Unfreezes every machine and clears all ownership. Use it if a cabinet ever "
                 + "refuses to let you out.");
@@ -96,6 +101,17 @@ namespace TcgMultiplayer
             try { _machines.ApplyPatches(_harmony); }
             catch (Exception ex) { Warn("Harmony patching failed: " + ex); }
 
+            // A friend's round can play out on your machine, so Steam must not
+            // hear about it. Blocked while a session or a rehearsal is running;
+            // single player is untouched.
+            StatsLock.ShouldBlock = () =>
+                (_pLockStats == null || _pLockStats.Value)
+                && (_session.State == SessionState.InLobby || _machines.Rehearse.Playing);
+            try { StatsLock.Apply(_harmony); }
+            catch (Exception ex) { Warn("Stats lock failed: " + ex); }
+
+            CompatCheck.ComputeGameHash();
+
             Log("Loaded. " + ToggleKeyName + " toggles the overlay, "
                 + (_pPanicKey != null ? _pPanicKey.Value : "F11") + " releases every machine.");
         }
@@ -125,6 +141,7 @@ namespace TcgMultiplayer
             _avatars.Tick();
             _machines.Tick();
             _world.Tick();
+            if (Time.frameCount % 600 == 0) CompatCheck.ReportOnce();
         }
 
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)

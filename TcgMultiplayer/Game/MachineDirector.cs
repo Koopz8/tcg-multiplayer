@@ -79,6 +79,8 @@ namespace TcgMultiplayer.Game
             if (processEvent == null)
             {
                 Plugin.Warn("Fsm.ProcessEvent not found — machine mirroring disabled.");
+                CompatCheck.Set("PlayMaker hooks (Fsm.ProcessEvent, FsmState.OnEnter)", false,
+                                "PlayMaker version changed");
                 return;
             }
             harmony.Patch(processEvent, prefix: new HarmonyMethod(
@@ -97,6 +99,8 @@ namespace TcgMultiplayer.Game
             harmony.Patch(onEnter, prefix: new HarmonyMethod(
                 typeof(MachineDirector).GetMethod(nameof(OnStateEnter),
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)));
+
+            CompatCheck.Set("PlayMaker hooks (Fsm.ProcessEvent, FsmState.OnEnter)", true, null);
         }
 
         // States that mean "a player is now occupying this thing" / "...has left it".

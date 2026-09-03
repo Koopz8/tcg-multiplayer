@@ -298,6 +298,39 @@ which events are just per-frame noise.
 
 ---
 
+### M7 — release safety
+
+**Steam stats are locked during a session.** The game submits to ~48 leaderboards,
+and M3 makes a friend's round play out on your machine — so without this, watching
+someone win Skee Ball can post their score under your name. That's a cheat vector
+and the fastest way for a mod to get disowned by the developer it depends on.
+
+Everything funnels through Steamworks.NET's `SteamUserStats` in the end — the
+PlayMaker action pack, HLG's achievement service and LapinerTools' leaderboard
+uploader all call the same handful of methods — so six patches close every route:
+`SetAchievement`, `IndicateAchievementProgress`, `SetStat` ×2, `StoreStats`,
+`UploadLeaderboardScore`. Active only while a session or a rehearsal is running;
+**single player is untouched and achievements work normally**. The overlay reports
+how many calls have been blocked, and says loudly if the patches failed.
+
+**Compatibility is checked and stated, not assumed.** Nearly everything here binds
+to *names* — FSM names, state names, event names, PlayMaker globals, the path to
+the player mesh — and the developer can rename any of them in a patch without it
+looking like a breaking change from their side. The failure mode would otherwise be
+silent: machines that never claim, a wallet guard that never fires. So the mod
+verifies what it found and says what it didn't:
+
+- machine controllers (`Coin Machine Canvas CNTLR`)
+- `COINS Balance` / `TICKETS Balance` globals
+- the player rig at `PLAYER/LARRY Mesh`
+- the movement controller
+- the two PlayMaker hooks
+
+The overlay's **Health** panel lists anything missing, and the log says it once,
+plainly. Two players also compare an FNV-1a hash of `Assembly-CSharp.dll` at the
+handshake, so a mismatched pair find out immediately rather than through an hour of
+strange desyncs.
+
 ## Building
 
 Needs the .NET SDK. Copy the game assemblies each project's `libs\README.txt`

@@ -150,6 +150,10 @@ namespace TcgMultiplayer.Game
 
             Plugin.Log("Machine registry: " + _byId.Count + " interactables, "
                        + _byFsmInstance.Count + " FSMs mapped.");
+
+            if (_byId.Count > 0)
+                CompatCheck.Set("machine controllers (" + ControllerFsmName + ")", true,
+                                _byId.Count + " found");
             return _byId.Count;
         }
 
