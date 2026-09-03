@@ -24,6 +24,23 @@ namespace TcgMultiplayer.Game
     ///
     /// The names below came out of the 658-global dump; they are the ones that
     /// describe the place rather than the person.
+    ///
+    /// VISITING
+    /// --------
+    /// Walking into someone else's island used to be a one-way door: the host's
+    /// unlocks were written straight into the guest's globals, the game saved at
+    /// some point, and the guest went home owning things they never bought. For
+    /// a mod anyone can download that is the worst kind of bug — it costs the
+    /// player their own progression and there is no undo.
+    ///
+    /// So a guest's stay is now explicitly a visit. Their own values are taken
+    /// aside on arrival, the host's island is laid over the top for the duration,
+    /// and on the way out their own progression is put back — with anything they
+    /// personally unlocked while they were there re-applied on top, because they
+    /// did earn that. The host is unaffected; it is their island either way.
+    ///
+    /// SaveGuard covers what this cannot: a crash mid-visit never reaches the
+    /// restore, so there is a copy of the save from before anyone connected.
     /// </summary>
     internal sealed class WorldState
     {
@@ -45,6 +62,22 @@ namespace TcgMultiplayer.Game
         private bool _resolved;
         private bool _applying;          // suppresses echo while we write a remote value
         private float _nextPollAt;
+
+        // --- visiting someone else's island -------------------------------
+        private readonly Dictionary<string, object> _ownWorld =
+            new Dictionary<string, object>(StringComparer.Ordinal);
+        private readonly HashSet<string> _earnedWhileVisiting =
+            new HashSet<string>(StringComparer.Ordinal);
+        private bool _visiting;
+        private bool _visitPending;      // joined, but the save wasn't loaded yet
+
+        /// <summary>Guests keep their own progression across a visit. Off means the old behaviour.</summary>
+        public bool ProtectGuestProgression = true;
+
+        public bool Visiting { get { return _visiting; } }
+        public bool VisitPending { get { return _visitPending; } }
+        public int EarnedWhileVisiting { get { return _earnedWhileVisiting.Count; } }
+        public int StashedCount { get { return _ownWorld.Count; } }
 
         public int TrackedCount { get { return _vars.Count; } }
         public int ChangesSent, ChangesApplied;
@@ -126,6 +159,9 @@ namespace TcgMultiplayer.Game
             _nextPollAt = Time.time + 0.5f;
             if (!Resolve()) return;
 
+            // Save just finished loading? This is where a pending visit is taken.
+            if (_visitPending && !TryStash()) return;
+
             // Polling rather than hooking: unlocks are set from PlayMaker actions
             // scattered across the game, and half a second of latency on "the
             // arcade is now unlocked" is imperceptible.
@@ -136,14 +172,140 @@ namespace TcgMultiplayer.Game
                 try { now = v.RawValue; } catch { continue; }
 
                 object was;
-                if (_last.TryGetValue(v.Name, out was) && Equals(was, now)) continue;
+                if (!_last.TryGetValue(v.Name, out was))
+                {
+                    // No baseline — a RawValue read failed back in Resolve. Seed
+                    // it rather than reporting a change: while visiting, a false
+                    // change is recorded as something the guest earned, and they
+                    // would take one of the host's unlocks home with them.
+                    _last[v.Name] = now;
+                    continue;
+                }
+                if (Equals(was, now)) continue;
                 _last[v.Name] = now;
 
                 if (_applying) continue;             // it was us, applying a remote value
+
+                // A change that started here, on this machine, is something the
+                // player did — so it survives the trip home even though the rest
+                // of the host's island does not.
+                if (_visiting) _earnedWhileVisiting.Add(v.Name);
+
                 _session.SendWorldVar(v.Name, now);
                 ChangesSent++;
                 Plugin.Log("World change: " + v.Name + " = " + now);
             }
+        }
+
+        // ---------------------------------------------------------- visiting
+
+        /// <summary>
+        /// Called when this player joins a lobby they don't own. Takes their own
+        /// progression aside before the host's snapshot lands on top of it.
+        /// </summary>
+        public void BeginVisit()
+        {
+            if (_visiting || _visitPending) return;
+            if (!ProtectGuestProgression) return;
+
+            // The commonest way to join is accepting an invite from the main
+            // menu, or +connect_lobby at launch — both before a save is loaded,
+            // when the PlayMaker globals hold nothing worth keeping. Failing here
+            // and giving up would silently restore exactly the behaviour this
+            // exists to prevent, so the stash is marked pending instead and taken
+            // the moment the globals become readable. Until then no host value is
+            // allowed to land.
+            _visitPending = true;
+            if (!TryStash())
+                Plugin.Log("Visiting: your save isn't loaded yet, so your progression will be "
+                           + "stashed as soon as it is. Nothing from the host is applied before then.");
+        }
+
+        /// <summary>
+        /// Takes the stash if the globals are readable. Called from BeginVisit,
+        /// from the poll, and — critically — before any remote value is applied.
+        /// </summary>
+        private bool TryStash()
+        {
+            if (!_visitPending) return _visiting;
+            if (!Resolve()) return false;
+
+            _ownWorld.Clear();
+            _earnedWhileVisiting.Clear();
+
+            for (int i = 0; i < _vars.Count; i++)
+            {
+                try { _ownWorld[_vars[i].Name] = _vars[i].RawValue; } catch { }
+            }
+
+            _visitPending = false;
+            _visiting = true;
+            Plugin.Log("Visiting: stashed " + _ownWorld.Count + " of your own progression values. "
+                       + "They go back when you leave.");
+
+            // The host's snapshot is sent once, on HelloAck. If our save wasn't
+            // loaded then, every value in it was refused — and nothing would ever
+            // ask again, leaving us playing our own island while everyone else
+            // played the host's, with no symptom until a door disagreed. Ask now.
+            if (!_session.IsHost)
+            {
+                try { _session.RequestWorldSnapshot(); }
+                catch (Exception ex) { Plugin.Warn("Could not re-request the island: " + ex.Message); }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Called on leaving, being disconnected, or quitting. Puts the player's
+        /// own island back, keeping anything they unlocked themselves.
+        /// </summary>
+        public void EndVisit()
+        {
+            _visitPending = false;
+            if (!_visiting) return;
+            _visiting = false;
+
+            int restored = 0, kept = 0, unchanged = 0;
+            try
+            {
+                _applying = true;
+                foreach (var kv in _ownWorld)
+                {
+                    // Earned it themselves: leave the session value in place.
+                    if (_earnedWhileVisiting.Contains(kv.Key)) { kept++; continue; }
+
+                    NamedVariable v;
+                    if (!_byName.TryGetValue(kv.Key, out v) || v == null) continue;
+                    try
+                    {
+                        // Already the value we stashed — two players at a similar
+                        // point in the game, or two fresh saves. Nothing to undo,
+                        // and counting it matters: without it the check below
+                        // would tell a perfectly fine player their save is broken.
+                        if (Equals(v.RawValue, kv.Value)) { unchanged++; continue; }
+                        v.RawValue = kv.Value;
+                        _last[kv.Key] = kv.Value;
+                        restored++;
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex) { Plugin.Warn("Restoring your progression hit a snag: " + ex.Message); }
+            finally { _applying = false; }
+
+            Plugin.Log("Visit over: put back " + restored + " of your own values, kept " + kept
+                       + " you unlocked yourself.");
+
+            // Restoring nothing at all, when we stashed something and kept
+            // nothing, means the writes went somewhere that no longer matters —
+            // a rebuilt global table, stale variable references. Cheap detector
+            // for a failure that would otherwise be completely silent.
+            if (restored == 0 && kept == 0 && unchanged == 0 && _ownWorld.Count > 0)
+                Plugin.Warn("Your progression was stashed but nothing was restored. If your unlocks "
+                            + "look wrong, close the game and restore from a save backup — see the "
+                            + SaveGuard.BackupFolderName + " folder.");
+            _ownWorld.Clear();
+            _earnedWhileVisiting.Clear();
         }
 
         // ------------------------------------------------------------- receiving
@@ -151,6 +313,16 @@ namespace TcgMultiplayer.Game
         private void OnRemoteChange(CSteamID from, string name, object value, bool fromHost)
         {
             if (!Resolve()) return;
+
+            // Nothing from the host touches our globals until our own copy is
+            // safely aside. If we can't stash yet, we drop the change — the host
+            // re-broadcasts world state on request and the poll picks up the rest,
+            // so the cost is a moment's staleness rather than someone's save.
+            if (_visitPending && !TryStash())
+            {
+                Plugin.Log("Held off applying " + name + " — your progression isn't stashed yet.");
+                return;
+            }
 
             // The host is the single point that decides, exactly as with machine
             // ownership: a guest's change is a request, and only the host's
@@ -201,6 +373,16 @@ namespace TcgMultiplayer.Game
         {
             if (!_session.IsHost || !Resolve()) return;
 
+            // Steam can promote a guest to lobby owner. That makes them the owner
+            // of a chat room, not the owner of an island — the globals they are
+            // holding are the old host's, borrowed. Serving those to a joiner
+            // would spread someone else's progression to a third player.
+            if (_visiting || _visitPending)
+            {
+                Plugin.Warn("Refused to serve a world snapshot: these aren't our unlocks to hand out.");
+                return;
+            }
+
             int sent = 0;
             for (int i = 0; i < _vars.Count; i++)
             {
@@ -217,7 +399,11 @@ namespace TcgMultiplayer.Game
             get
             {
                 if (!Available) return "world globals not readable yet";
-                return TrackedCount + " shared  ·  " + ChangesSent + " sent, " + ChangesApplied + " applied";
+                var s = TrackedCount + " shared  ·  " + ChangesSent + " sent, " + ChangesApplied + " applied";
+                if (_visiting)
+                    s += "  ·  visiting (" + _ownWorld.Count + " of yours stashed, "
+                       + _earnedWhileVisiting.Count + " earned here)";
+                return s;
             }
         }
     }

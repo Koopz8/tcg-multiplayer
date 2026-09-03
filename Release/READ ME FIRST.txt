@@ -1,0 +1,141 @@
+THE COIN GAME - MULTIPLAYER
+===========================
+version 0.9.0
+
+Play The Coin Game with friends. You share an island, take turns on the
+machines, watch each other play, and keep your own money.
+
+
+INSTALL
+-------
+
+1. Close The Coin Game if it's open.
+2. Double-click  "INSTALL - double click me.bat"
+3. If Windows asks whether to allow changes, click Yes. The game usually
+   lives in Program Files, and writing there needs permission.
+4. Launch from Steam as normal.
+
+The installer finds the game on its own, installs MelonLoader for you, and
+puts the mod in place. If it can't find the game it'll ask, and tell you
+where to look.
+
+Everyone playing needs to do this. Everyone needs their own copy of the game.
+
+
+PLAYING
+-------
+
+Press F9 to open the panel.
+
+  Host           starts a session on your island
+  Invite friend  opens the Steam overlay to invite someone
+  Leave          ends your session
+
+Your friend can also join from Steam directly - right-click you in the
+friends list, Join Game.
+
+Everyone must be running the same version of the mod. The mod checks and
+will refuse to connect if you aren't, telling you which version each of you
+has. You should also be on the same version of the game; it'll warn you
+about that too.
+
+
+WHAT'S SHARED AND WHAT ISN'T
+----------------------------
+
+Shared:      the island. Area unlocks, doors, and vehicles bought.
+             Machine occupancy - if someone's on a cabinet, you can watch
+             them play it rather than being locked out of the room.
+
+Yours alone: money, tickets, prizes, inventory, and everything you win.
+             Watching a friend hit a jackpot does not pay you, and it does
+             not pay them twice.
+
+
+VISITING SOMEONE ELSE'S ISLAND
+------------------------------
+
+This is the part worth understanding.
+
+When you join someone, you're a guest on their island, so you see their
+unlocks - their doors are open, their areas are available. When you leave,
+your own progression comes back exactly as it was, and anything you
+unlocked yourself while visiting stays yours.
+
+The one gap: if the game crashes while you're a guest, that tidy-up never
+runs. That's what the backup is for.
+
+
+YOUR SAVE
+---------
+
+The first time you host or join in a play session, your save folder is
+copied aside automatically. Five copies are kept. You'll find them in:
+
+  %USERPROFILE%\AppData\LocalLow\devotid\...\TcgMultiplayer_SaveBackups\
+
+The panel shows where the most recent one went, and has a button to make
+one whenever you like.
+
+This is real insurance, not a formality. If something ever goes wrong,
+close the game, copy the files from the newest backup folder back over the
+save, and you're where you were.
+
+
+ACHIEVEMENTS AND LEADERBOARDS
+-----------------------------
+
+While you're in a session, the mod blocks the game from submitting anything
+to Steam. This is deliberate: spectating replays your friend's round on your
+machine, and without the block their score would post under your name.
+
+Playing alone, with nobody connected, is completely untouched. Achievements
+and leaderboards work exactly as they always have.
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+
+Stuck in a machine and can't get out?   Press F11.
+
+Anything else - open the panel with F9. If part of the mod has switched
+itself off, it says so at the top, in words, with a button to try again.
+
+For a bug report, this file has everything needed:
+
+  <game folder>\MelonLoader\Latest.log
+
+Steam, right-click The Coin Game, Manage, Browse local files.
+
+Please say what you were doing, whether you were hosting or joining, and
+what both of you saw - a lot of multiplayer bugs only make sense from both
+sides.
+
+
+UNINSTALLING
+------------
+
+Double-click UNINSTALL.bat. Your save is not touched.
+
+Or let Steam do it: right-click the game, Properties, Installed Files,
+Verify integrity of game files.
+
+
+ANTIVIRUS
+---------
+
+MelonLoader works by placing a file called version.dll next to the game.
+It's a standard, widely used modding technique, but some antivirus software
+is suspicious of it. If yours quarantines that file, the game simply starts
+unmodded - nothing is damaged. You'd need to allow it for the mod to load.
+
+
+CREDITS AND LICENCE
+-------------------
+
+See LICENSE.txt. Short version: the mod is MIT licensed, MelonLoader is
+Apache 2.0 and is downloaded from its official release page rather than
+bundled, and nothing from The Coin Game is redistributed here.
+
+The Coin Game is by devotid, published by Kwalee. This is an unofficial fan
+project with no connection to either.

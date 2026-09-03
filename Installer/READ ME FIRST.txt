@@ -1,0 +1,98 @@
+The Coin Game - Multiplayer
+===========================
+
+This adds online co-op to The Coin Game. You and a friend walk around the
+same arcade, take turns on the machines, watch each other play, and keep
+your own separate wallets.
+
+
+HOW TO INSTALL
+--------------
+
+1. Close The Coin Game if it's open.
+2. Double-click  "INSTALL - double click me.bat"
+3. If Windows asks whether to allow changes, click Yes. The game usually
+   lives in Program Files, and writing there needs permission.
+4. When it says Done, launch the game from Steam like normal.
+
+That's it. The installer finds the game on its own. If it can't, it'll ask
+you to paste the folder path and tells you where to find it.
+
+
+FIRST LAUNCH
+------------
+
+A black console window opens next to the game. That's MelonLoader, the
+thing that lets mods run. Leave it alone - if something goes wrong, that
+window is where the useful information ends up.
+
+The first launch is slower than usual. Give it a minute.
+
+
+IN GAME
+-------
+
+  F9    Opens the multiplayer panel. Host a game, join a friend, chat,
+        and see whether everything is healthy.
+
+  F11   Unstuck button. If you ever can't get off a machine, press this.
+
+  F7    Dumps technical info to a file. Only press it if Mason asks.
+
+The panel needs the mouse, so it unlocks the cursor while it's open.
+Press F9 again to close it and get control back.
+
+
+BEFORE YOU PLAY TOGETHER
+------------------------
+
+When the installer finishes it prints two lines:
+
+  Game build fingerprint
+  Steam build id
+
+Send those to the person you're playing with. If they don't match, one of
+you is on a different version of the game, and things will go wrong in
+confusing ways. The mod checks this when you connect and warns you, but
+it's easier to sort out beforehand.
+
+You should also be Steam friends. The connection goes through Steam's own
+networking, and it's much less fussy between friends.
+
+
+ACHIEVEMENTS AND LEADERBOARDS
+-----------------------------
+
+While you're in a multiplayer session, the mod blocks the game from
+sending anything to Steam. This is on purpose. You'll be watching your
+friend play machines on your own copy of the game, and without that block
+their scores would get posted under your name.
+
+Playing on your own, with nobody connected, works exactly as it always
+did. Achievements and leaderboards are untouched.
+
+
+IF SOMETHING BREAKS
+-------------------
+
+Grab this file and send it over:
+
+  <game folder>\MelonLoader\Latest.log
+
+The quickest way to the game folder is Steam, right-click The Coin Game,
+Manage, Browse local files.
+
+To go back to a clean unmodded game, double-click UNINSTALL.bat. Your save
+is stored by the game itself and is never touched by any of this. If you'd
+rather let Steam do it, right-click the game, Properties, Installed Files,
+Verify integrity of game files.
+
+
+A NOTE ON ANTIVIRUS
+-------------------
+
+MelonLoader works by putting a file called version.dll next to the game.
+That's a normal, well-known modding technique used by thousands of mods,
+but some antivirus software is twitchy about it. If your antivirus quaran-
+tines version.dll, the game will just launch without any mods and nothing
+is harmed. You'd need to allow it for the mod to load.
