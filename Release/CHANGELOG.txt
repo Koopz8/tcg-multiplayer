@@ -1,0 +1,76 @@
+CHANGELOG
+=========
+
+0.9.0
+-----
+First build prepared for public release.
+
+Added
+  * Your save is copied aside the first time you host or join a session.
+    Five copies are kept, in a TcgMultiplayer_SaveBackups folder next to the
+    save itself. There's also a button in the panel to do it on demand.
+
+  * Visiting someone else's island no longer follows you home. Your own
+    unlocks are held aside while you're a guest and put back when you leave,
+    and anything you unlocked yourself while visiting stays yours. This was
+    the most dangerous thing about the mod and it is now the safest.
+
+  * The mod refuses to join a host running a different version of it, and
+    says which version each of you has. Two different versions could read
+    each other's packets wrongly, and the symptoms would have looked like
+    anything except the real cause.
+
+  * A different build of the game is now flagged in the panel rather than
+    only in a log file nobody opens.
+
+  * If the host leaves, the session ends cleanly for everyone instead of
+    Steam quietly handing the lobby to a guest who does not have the world.
+
+  * Every part of the mod that runs each frame is isolated. A bug in one of
+    them switches that feature off and says so in the panel, instead of
+    throwing sixty times a second and taking your framerate with it. There's
+    a button to try them again without restarting.
+
+Changed
+  * The panel no longer opens on startup. Press F9 when you want it.
+  * The solo testing tools are folded away behind a toggle.
+  * On quit, the session is closed before anything else, so a guest's own
+    progression is restored before the game writes its save.
+
+
+0.8.0
+-----
+  * Steam achievements, stats and leaderboards are blocked for the duration
+    of a session. Spectating replays a friend's round on your machine, so
+    without this their score could post under your name. Single player is
+    completely unaffected.
+  * A health panel that names anything the mod expected to find and didn't,
+    rather than failing silently.
+  * The game build is fingerprinted and compared between players.
+
+0.7.0
+  * Recorded rounds replay with physics, through the real spectator path.
+
+0.6.1
+  * Fixed being unable to leave a machine after playing a round. Machines the
+    player is inside are never frozen, only the 14 cabinets that actually have
+    an unfreeze state are ever frozen at all, and F11 releases everything.
+
+0.6.0
+  * Rehearsal: record a round and replay it as if a friend were playing it.
+
+0.5.0
+  * Shared island progression - unlocks, doors and vehicles.
+
+0.4.0
+  * Per-player wallets, with 254 economy globals held steady while you watch
+    someone else play.
+
+0.3.0
+  * Machine ownership, occupancy and live spectating.
+
+0.2.0
+  * Player bodies, with movement and animation.
+
+0.1.0
+  * Lobby, handshake, chat and round-trip timing over Steam networking.

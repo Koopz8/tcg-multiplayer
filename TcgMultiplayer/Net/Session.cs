@@ -59,14 +59,33 @@ namespace TcgMultiplayer.Net
         public Action<CSteamID> OnWorldSnapshotRequest;
         /// <summary>Rigidbody poses inside a machine someone else is playing.</summary>
         public Action<CSteamID, uint, byte[]> OnMachinePhysics;
+        /// <summary>A session has begun. Argument: true if we are the host.</summary>
+        public Action<bool> OnSessionBegan;
+        /// <summary>A session has ended, however it ended. Nothing may assume a clean exit.</summary>
+        public Action OnSessionEnded;
+
+        /// <summary>
+        /// Set when we walked away from a lobby because it was not compatible.
+        /// The overlay shows this; it is the difference between "it didn't work"
+        /// and "here is exactly what to fix".
+        /// </summary>
+        public string RefusedReason { get; private set; }
+
+        /// <summary>Same build of the game as the host? Null until we've been in a lobby.</summary>
+        public string BuildMismatch { get; private set; }
 
         private Callback<LobbyEnter_t> _cbLobbyEnter;
         private Callback<LobbyChatUpdate_t> _cbLobbyChat;
         private Callback<GameLobbyJoinRequested_t> _cbJoinRequested;
         private Callback<SteamNetworkingMessagesSessionRequest_t> _cbSessionRequest;
         private Callback<SteamNetworkingMessagesSessionFailed_t> _cbSessionFailed;
+        private Callback<SteamServersDisconnected_t> _cbDisconnected;
         private CallResult<LobbyCreated_t> _crLobbyCreated;
 
+        private CSteamID _hostId;
+        private bool _wasHostAtJoin;
+        private double _nextLobbyWatchAt, _lastTickAt, _lastTickGap;
+        private int _emptyLobbyReads;
         private readonly List<SteamTransport.Received> _inbox = new List<SteamTransport.Received>();
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private double _nextPingAt;
@@ -93,6 +112,7 @@ namespace TcgMultiplayer.Net
                 _cbJoinRequested = Callback<GameLobbyJoinRequested_t>.Create(OnJoinRequested);
                 _cbSessionRequest = Callback<SteamNetworkingMessagesSessionRequest_t>.Create(OnSessionRequest);
                 _cbSessionFailed = Callback<SteamNetworkingMessagesSessionFailed_t>.Create(OnSessionFailed);
+                _cbDisconnected = Callback<SteamServersDisconnected_t>.Create(OnSteamDisconnected);
                 _crLobbyCreated = CallResult<LobbyCreated_t>.Create(OnLobbyCreated);
 
                 Ready = true;
@@ -113,6 +133,7 @@ namespace TcgMultiplayer.Net
             if (!Ready || State != SessionState.Offline) return;
             State = SessionState.Creating;
             IsHost = true;
+            _wasHostAtJoin = true;      // decided here, not inferred from Steam later
             Log("Creating lobby...");
             var call = SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, maxPlayers);
             _crLobbyCreated.Set(call);
@@ -123,6 +144,7 @@ namespace TcgMultiplayer.Net
             if (!Ready || State != SessionState.Offline) return;
             State = SessionState.Joining;
             IsHost = false;
+            _wasHostAtJoin = false;
             Log("Joining lobby " + lobby.m_SteamID + "...");
             SteamMatchmaking.JoinLobby(lobby);
         }
@@ -130,17 +152,39 @@ namespace TcgMultiplayer.Net
         public void Leave()
         {
             if (State == SessionState.Offline) return;
+
+            // Fired first and unconditionally: whatever needs to put the player's
+            // own world back has to run before the lobby is gone, and has to run
+            // on every exit path — the button, a dropped host, quitting the game.
+            if (OnSessionEnded != null)
+            {
+                try { OnSessionEnded(); }
+                catch (Exception ex) { Log("Session-end handler threw: " + ex.Message); }
+            }
+
+            // Leave() is now reached from three Steam callbacks as well as the
+            // button. An exception escaping this loop would land in the game's
+            // own callback pump, outside every Guard, and would leave Peers
+            // populated with State still InLobby — a session that cannot be left.
             foreach (var p in Peers)
             {
-                Send(p, Op.Bye, null);
-                SteamTransport.CloseSession(p.Id);
-                if (OnPeerGone != null) OnPeerGone(p.Id);
+                try
+                {
+                    Send(p, Op.Bye, null);
+                    SteamTransport.CloseSession(p.Id);
+                    if (OnPeerGone != null) OnPeerGone(p.Id);
+                }
+                catch (Exception ex) { Log("Tidy-up for " + p.Name + " threw: " + ex.Message); }
             }
             Peers.Clear();
             if (Lobby.IsValid()) SteamMatchmaking.LeaveLobby(Lobby);
             Lobby = default(CSteamID);
             State = SessionState.Offline;
             IsHost = false;
+            _hostId = default(CSteamID);
+            _wasHostAtJoin = false;
+            _emptyLobbyReads = 0;
+            _lastTickAt = 0;
             Log("Left the session.");
         }
 
@@ -336,6 +380,95 @@ namespace TcgMultiplayer.Net
                     SendOn(p, Op.Ping, SteamTransport.ChannelPing, false, w => w.I64(tick));
                 }
             }
+
+            // How long this frame actually took. A long scene load, or the save
+            // backup running synchronously on join, can stall the main thread for
+            // longer than the peer timeout — and the Stopwatch keeps counting
+            // through it. Charging frozen wall-clock time against peers would
+            // reap a perfectly healthy host the moment the game unfroze.
+            _lastTickGap = _lastTickAt > 0 ? now - _lastTickAt : 0;
+            _lastTickAt = now;
+
+            // Credit the frozen time straight back to the peers rather than
+            // relying on the watchdog happening to run on the same tick. The
+            // stall may end two seconds before a scheduled pass, by which point
+            // the gap has been forgotten but the silence has not.
+            if (_lastTickGap > StallSeconds)
+                foreach (var p in Peers) if (p.LastHeardAt > 0) p.LastHeardAt += _lastTickGap;
+
+            if (now >= _nextLobbyWatchAt) { _nextLobbyWatchAt = now + 3.0; WatchLobby(now); }
+        }
+
+        /// <summary>How long a peer can say nothing before we treat them as gone.</summary>
+        private const double PeerTimeoutSeconds = 30.0;
+
+        /// <summary>A frame longer than this means the clock ran while the game didn't.</summary>
+        private const double StallSeconds = 2.0;
+
+        /// <summary>
+        /// The callbacks cover the polite exits. This covers the rest — being
+        /// dropped, kicked, or quietly starved of packets — because a guest whose
+        /// session ends without anyone noticing keeps the host's progression, and
+        /// that is the one failure this mod must not have.
+        /// </summary>
+        private void WatchLobby(double now)
+        {
+            if (State != SessionState.InLobby) return;
+
+            // The owner can read as nil for a moment after entering. If it did,
+            // every host-departure check downstream is inert — _hostId matches
+            // nobody — so a guest would sit in the host's island with no way to
+            // notice they had gone. Keep re-resolving until it answers.
+            if (!_hostId.IsValid())
+            {
+                var owner = SteamMatchmaking.GetLobbyOwner(Lobby);
+                if (owner.IsValid())
+                {
+                    _hostId = owner;    // _wasHostAtJoin stays as Host()/Join() set it
+                    Log("Resolved the host late: " + NameOf(owner));
+                }
+            }
+
+            // Are we even still in this lobby? Steam answers honestly here even
+            // when the chat-update callback never arrived — but one bad read
+            // would tear a healthy lobby down for everyone, so it takes two.
+            bool gone = !Lobby.IsValid() || SteamMatchmaking.GetNumLobbyMembers(Lobby) == 0;
+            _emptyLobbyReads = gone ? _emptyLobbyReads + 1 : 0;
+            if (_emptyLobbyReads >= 2)
+            {
+                Chat.Add("[!] The lobby is gone. Session ended.");
+                Log("Lobby empty or invalid on two consecutive checks — ending the session.");
+                Leave();
+                return;
+            }
+            if (gone) return;   // one bad read: wait and look again
+
+            if (!_wasHostAtJoin && _hostId.IsValid() && !IsLobbyMember(_hostId))
+            {
+                Chat.Add("[!] The host is no longer in the lobby. Session ended.");
+                Log("Host missing from lobby membership — ending the session.");
+                Leave();
+                return;
+            }
+
+            // Skip the silence check on the pass after a stall: the peers were
+            // never given a chance to be heard from.
+            if (_lastTickGap > StallSeconds) return;
+
+            for (int i = Peers.Count - 1; i >= 0; i--)
+            {
+                var p = Peers[i];
+                if (!p.Handshaked || p.LastHeardAt <= 0) continue;
+                if (now - p.LastHeardAt < PeerTimeoutSeconds) continue;
+
+                Log(p.Name + " timed out after " + PeerTimeoutSeconds + "s of silence.");
+                Chat.Add("[!] " + p.Name + " timed out.");
+                SteamTransport.CloseSession(p.Id);
+                if (OnPeerGone != null) OnPeerGone(p.Id);
+                Peers.RemoveAt(i);
+
+                if (!_wasHostAtJoin && p.Id == _hostId) { Leave(); return; }
+            }
         }
 
         // ------------------------------------------------------------ callbacks
@@ -359,24 +492,94 @@ namespace TcgMultiplayer.Net
 
         private void OnLobbyEnter(LobbyEnter_t cb)
         {
+            // Steam fires this for failed joins too — full, gone, banned, rate
+            // limited. Taking it as success meant sitting in a lobby that does
+            // not exist: Host greyed out, achievements suppressed for the rest
+            // of the launch, and no explanation anywhere.
+            const uint enterSuccess = 1;   // k_EChatRoomEnterResponseSuccess
+            if (cb.m_EChatRoomEnterResponse != enterSuccess)
+            {
+                RefusedReason = "Steam wouldn't let you into that lobby (code "
+                                + cb.m_EChatRoomEnterResponse + "). It may be full, "
+                                + "already closed, or the ID may be stale.";
+                Log("Lobby join rejected by Steam: response " + cb.m_EChatRoomEnterResponse);
+                State = SessionState.Offline;
+                Lobby = default(CSteamID);
+                return;
+            }
+
             Lobby = new CSteamID(cb.m_ulSteamIDLobby);
             State = SessionState.InLobby;
-            IsHost = SteamMatchmaking.GetLobbyOwner(Lobby) == SelfId;
+            _hostId = SteamMatchmaking.GetLobbyOwner(Lobby);
+            IsHost = _hostId == SelfId;
 
+            // _wasHostAtJoin is deliberately NOT derived from the owner read.
+            // Host() and Join() already know the answer with certainty, and the
+            // owner can read as nil for a moment here — or, if the real host quit
+            // inside that window, can read as us, latching "I was the host" onto
+            // a guest and switching off every host-departure check they have.
+
+            RefusedReason = null;
+            BuildMismatch = null;
+
+            // A different mod version is not a warning, it is an incompatibility.
+            // The wire format is ours and it changes between releases, so carrying
+            // on would mean two games confidently misreading each other's packets
+            // — and the symptoms would look like everything except the real cause.
+            // Better to stop here and say exactly what is wrong.
             var hostVersion = SteamMatchmaking.GetLobbyData(Lobby, LobbyKeyMod);
-            if (!string.IsNullOrEmpty(hostVersion) && hostVersion != Plugin.Version)
-                Log("WARNING: host runs TcgMultiplayer " + hostVersion + ", you run " + Plugin.Version);
+            if (!IsHost && !string.IsNullOrEmpty(hostVersion) && hostVersion != Plugin.Version)
+            {
+                RefusedReason = "The host is running TcgMultiplayer " + hostVersion
+                                + " and you have " + Plugin.Version
+                                + ". You both need the same version — whoever is older should update.";
+                Log("Refused to join: " + RefusedReason);
+                Leave();
+                return;
+            }
 
+            // A different game build is survivable — machines are matched by
+            // hierarchy path, and a patch usually leaves most of them alone — so
+            // this one warns rather than refuses. But it warns where it will
+            // actually be seen.
+            // hostBuild is lobby data, which means it is whatever the other end
+            // put there — length included. Our own hash is the literal string
+            // "unknown" when the assembly could not be read. Substring(0,8) on
+            // either would throw, inside a Steam callback, outside every Guard,
+            // and would abort the rest of this handler: no backup, no stash, no
+            // handshake, and a player stuck in a lobby with no peers.
             var hostBuild = SteamMatchmaking.GetLobbyData(Lobby, LobbyKeyBuild);
-            if (!string.IsNullOrEmpty(hostBuild) && hostBuild != "unknown"
-                && CompatCheck.GameHash != null && hostBuild != CompatCheck.GameHash)
-                Log("WARNING: the host is on a different build of the game. "
-                    + "Machines and unlocks may not line up. Host " + hostBuild
-                    + ", you " + CompatCheck.GameHash);
+            var myBuild = CompatCheck.GameHash;
+            if (IsRealHash(hostBuild) && IsRealHash(myBuild) && hostBuild != myBuild)
+            {
+                BuildMismatch = "Host is on game build " + Short(hostBuild)
+                                + ", you are on " + Short(myBuild)
+                                + ". Some machines or unlocks may not line up.";
+                Log("WARNING: " + BuildMismatch);
+                Chat.Add("[!] " + BuildMismatch);
+            }
 
             Log("In lobby " + Lobby.m_SteamID + (IsHost ? " (host)" : " (client)"));
+
+            // Membership and ownership can both read oddly for a second or two
+            // right after entering. Give Steam time to settle before the watchdog
+            // is allowed to conclude the lobby is dead.
+            _nextLobbyWatchAt = _clock.Elapsed.TotalSeconds + 10.0;
+
+            if (OnSessionBegan != null) OnSessionBegan(IsHost);
+
             RefreshPeers();
             foreach (var p in Peers) SendHello(p);
+        }
+
+        private static bool IsRealHash(string h)
+        {
+            return !string.IsNullOrEmpty(h) && h != "unknown" && h.Length >= 8;
+        }
+
+        private static string Short(string h)
+        {
+            return string.IsNullOrEmpty(h) ? "?" : (h.Length <= 8 ? h : h.Substring(0, 8));
         }
 
         private void OnLobbyChatUpdate(LobbyChatUpdate_t cb)
@@ -400,8 +603,42 @@ namespace TcgMultiplayer.Net
                     if (OnPeerGone != null) OnPeerGone(p.Id);
                     Peers.Remove(p);
                 }
+
+                // There is no host migration, and pretending otherwise would be
+                // worse than not having it: machine ownership and the island's
+                // progression are both the host's to arbitrate, and Steam handing
+                // a guest the lobby doesn't hand them the world. So when the host
+                // goes, the session ends — cleanly, which is what puts everyone's
+                // own progression back.
+                //
+                // Compared against _wasHostAtJoin, not IsHost. With three or more
+                // players, Steam promotes a guest the moment the host leaves; if
+                // another member's update was processed first, IsHost had already
+                // flipped to true and this check silently stopped firing — leaving
+                // that player holding the host's island with no restore pending,
+                // and handing it out to the next joiner as though it were theirs.
+                if (!_wasHostAtJoin && who == _hostId)
+                {
+                    Chat.Add("[!] The host left. Ending the session.");
+                    Log("Host left the lobby — leaving.");
+                    Leave();
+                    return;
+                }
             }
             IsHost = SteamMatchmaking.GetLobbyOwner(Lobby) == SelfId;
+        }
+
+        /// <summary>
+        /// Steam dropped us. The lobby is gone whether or not anything told us
+        /// politely, so this has to end the session — it is the path that leaves
+        /// a guest holding someone else's progression if it is missed.
+        /// </summary>
+        private void OnSteamDisconnected(SteamServersDisconnected_t cb)
+        {
+            if (State == SessionState.Offline) return;
+            Chat.Add("[!] Lost the connection to Steam. Session ended.");
+            Log("SteamServersDisconnected — ending the session.");
+            Leave();
         }
 
         private void OnJoinRequested(GameLobbyJoinRequested_t cb)
@@ -428,6 +665,16 @@ namespace TcgMultiplayer.Net
         {
             var peer = cb.m_info.m_identityRemote.GetSteamID();
             Log("Session failed with " + NameOf(peer) + ": " + cb.m_info.m_eEndReason);
+
+            // Losing the transport to the host is losing the session, even though
+            // Steam's lobby membership can outlive it by minutes. Left alone, a
+            // guest sits in a dead session with the host's island applied and
+            // nothing to trigger the restore.
+            if (State != SessionState.Offline && !_wasHostAtJoin && peer == _hostId)
+            {
+                Chat.Add("[!] Lost the connection to the host. Session ended.");
+                Leave();
+            }
         }
 
         // ------------------------------------------------------------- messages
@@ -460,7 +707,7 @@ namespace TcgMultiplayer.Net
                             Log("Connected to " + peer.Name + " (mod " + peer.ModVersion + ")");
                             // Now that we can talk, pull the host's island down so we
                             // arrive in their world rather than our own.
-                            if (!IsHost) RequestWorldSnapshot();
+                            if (!_wasHostAtJoin) RequestWorldSnapshot();
                             break;
 
                         case Op.Ping:

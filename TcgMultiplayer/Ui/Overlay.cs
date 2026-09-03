@@ -25,8 +25,9 @@ namespace TcgMultiplayer.Ui
         private string _joinDraft = "";
         private bool _showJoinField;
 
-        private GUIStyle _mono, _head, _dim;
+        private GUIStyle _mono, _head, _dim, _alert;
         private bool _stylesReady;
+        private bool _showAdvanced;
 
         public bool Visible;
 
@@ -48,6 +49,8 @@ namespace TcgMultiplayer.Ui
             _head.normal.textColor = new Color(1f, 0.86f, 0.55f);   // brass, matching the plan page
             _dim = new GUIStyle(GUI.skin.label) { fontSize = 11 };
             _dim.normal.textColor = new Color(0.72f, 0.72f, 0.70f);
+            _alert = new GUIStyle(GUI.skin.label) { fontSize = 12, wordWrap = true };
+            _alert.normal.textColor = new Color(1f, 0.55f, 0.45f);
             _stylesReady = true;
         }
 
@@ -60,6 +63,30 @@ namespace TcgMultiplayer.Ui
                 GUILayout.Label("Waiting for the game to initialise Steam...", _mono);
                 GUI.DragWindow(new Rect(0, 0, 10000, 20));
                 return;
+            }
+
+            // ---- anything actually wrong, first and unmissable ------------
+            // These used to be console warnings, which on a public release means
+            // nobody ever saw them. If something is going to ruin the session,
+            // it belongs at the top of the panel in words the player can act on.
+            if (!string.IsNullOrEmpty(_s.RefusedReason))
+            {
+                GUILayout.Label("COULD NOT JOIN", _head);
+                GUILayout.Label(_s.RefusedReason, _alert);
+                GUILayout.Space(6);
+            }
+            if (!string.IsNullOrEmpty(_s.BuildMismatch))
+            {
+                GUILayout.Label(_s.BuildMismatch, _alert);
+                GUILayout.Space(4);
+            }
+            if (Guard.AnythingBroken)
+            {
+                GUILayout.Label("Some of the mod switched itself off after repeated errors:", _alert);
+                foreach (var b in Guard.Broken) GUILayout.Label("   " + b, _dim);
+                if (GUILayout.Button("Try those again", GUILayout.Height(20))) Guard.ResetAll();
+                GUILayout.Label("Send MelonLoader\\Latest.log with a bug report — it has the detail.", _dim);
+                GUILayout.Space(6);
             }
 
             GUILayout.Label("You: " + _s.SelfName + "   (" + _s.SelfId.m_SteamID + ")", _dim);
@@ -126,15 +153,18 @@ namespace TcgMultiplayer.Ui
             GUILayout.Label("Avatars", _head);
             GUILayout.Label(_av.DebugLine, _dim);
 
-            GUILayout.BeginHorizontal();
-            bool mirror = GUILayout.Toggle(_av.MirrorEnabled, "  Mirror me (solo test)", GUILayout.Width(190));
-            if (mirror != _av.MirrorEnabled) _av.MirrorEnabled = mirror;
-            GUILayout.Label("delay", _dim, GUILayout.Width(38));
-            _av.MirrorDelay = Mathf.Round(GUILayout.HorizontalSlider(_av.MirrorDelay, 0.25f, 5f) * 4f) / 4f;
-            GUILayout.Label(_av.MirrorDelay.ToString("0.00") + "s", _mono, GUILayout.Width(48));
-            GUILayout.EndHorizontal();
-            GUILayout.Label("Mirror replays your own movement through the real wire format, so the "
-                          + "avatar path can be tested without a second copy of the game.", _dim);
+            if (_showAdvanced)
+            {
+                GUILayout.BeginHorizontal();
+                bool mirror = GUILayout.Toggle(_av.MirrorEnabled, "  Mirror me (solo test)", GUILayout.Width(190));
+                if (mirror != _av.MirrorEnabled) _av.MirrorEnabled = mirror;
+                GUILayout.Label("delay", _dim, GUILayout.Width(38));
+                _av.MirrorDelay = Mathf.Round(GUILayout.HorizontalSlider(_av.MirrorDelay, 0.25f, 5f) * 4f) / 4f;
+                GUILayout.Label(_av.MirrorDelay.ToString("0.00") + "s", _mono, GUILayout.Width(48));
+                GUILayout.EndHorizontal();
+                GUILayout.Label("Mirror replays your own movement through the real wire format, so the "
+                              + "avatar path can be tested without a second copy of the game.", _dim);
+            }
 
             // ---- machines -------------------------------------------------
             GUILayout.Space(6);
@@ -191,9 +221,61 @@ namespace TcgMultiplayer.Ui
                                  : ""), _dim);
             }
 
-            // ---- solo test harness ----------------------------------------
+            // ---- shared island --------------------------------------------
             GUILayout.Space(6);
-            GUILayout.Label("Solo tests", _head);
+            GUILayout.Label("Shared island", _head);
+            GUILayout.Label(_world.DebugLine, _dim);
+            GUILayout.Label("Unlocks, doors and vehicles are shared and host-arbitrated. "
+                          + "Money, tickets, prizes and inventory stay yours.", _dim);
+
+            if (_world.VisitPending)
+            {
+                GUILayout.Label("Waiting for your save to load before anything from the host is "
+                              + "applied. Your progression is safe until then.", _mono);
+            }
+            else if (_world.Visiting)
+            {
+                GUILayout.Label("You're visiting. " + _world.StashedCount + " of your own unlocks are "
+                              + "held aside and come back when you leave"
+                              + (_world.EarnedWhileVisiting > 0
+                                 ? ", plus the " + _world.EarnedWhileVisiting + " you've unlocked here"
+                                 : "") + ".", _mono);
+            }
+            else if (!_world.ProtectGuestProgression)
+            {
+                GUILayout.Label("Guest protection is OFF — a host's unlocks will follow you home.", _alert);
+            }
+
+            // ---- your save -------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Your save", _head);
+            GUILayout.Label("Backup: " + SaveGuard.Status, _dim);
+            if (GUILayout.Button("Back up my save now", GUILayout.Height(22))) SaveGuard.Backup();
+
+            // ---- health ---------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Health", _head);
+            GUILayout.Label("build " + (CompatCheck.GameHash ?? "?") + "  ·  " + CompatCheck.Summary, _mono);
+            foreach (var c in CompatCheck.Items)
+                if (!c.Ok) GUILayout.Label("   MISSING: " + c.What
+                                           + (string.IsNullOrEmpty(c.Detail) ? "" : " — " + c.Detail), _dim);
+            GUILayout.Label("Steam stats: " + StatsLock.Status, _dim);
+
+            // ---- solo test harness ----------------------------------------
+            // Folded away by default. It's genuinely useful — it's how most of
+            // this was built without a second copy of the game — but a player
+            // who just installed a co-op mod should not be met with a button
+            // marked "Fake: friend takes it".
+            GUILayout.Space(6);
+            _showAdvanced = GUILayout.Toggle(_showAdvanced, "  Testing tools (no second player needed)");
+            if (!_showAdvanced)
+            {
+                GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status + ".", _dim);
+                DrawChat();
+                GUI.DragWindow(new Rect(0, 0, 10000, 20));
+                return;
+            }
+
             GUILayout.Label("Ownership, spectating and the wallet guard only fire when someone "
                           + "else plays. These stand in for that friend.", _dim);
 
@@ -247,32 +329,19 @@ namespace TcgMultiplayer.Ui
             if (GUILayout.Button("Release everything (stuck in a machine?)", GUILayout.Height(22)))
                 _mc.ReleaseEverything();
 
-            // ---- shared island --------------------------------------------
-            GUILayout.Space(6);
-            GUILayout.Label("Shared island", _head);
-            GUILayout.Label(_world.DebugLine, _dim);
-            {
-                GUILayout.Label("Unlocks, doors and vehicles are shared and host-arbitrated. "
-                              + "Money, tickets, prizes and inventory stay yours.", _dim);
-            }
+            GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status + ".", _dim);
+            DrawChat();
+            GUI.DragWindow(new Rect(0, 0, 10000, 20));
+        }
 
-            // ---- health ---------------------------------------------------
-            GUILayout.Space(6);
-            GUILayout.Label("Health", _head);
-            GUILayout.Label("build " + (CompatCheck.GameHash ?? "?") + "  ·  " + CompatCheck.Summary, _mono);
-            foreach (var c in CompatCheck.Items)
-                if (!c.Ok) GUILayout.Label("   MISSING: " + c.What
-                                           + (string.IsNullOrEmpty(c.Detail) ? "" : " — " + c.Detail), _dim);
-            GUILayout.Label("Steam stats: " + StatsLock.Status, _dim);
-
-            // ---- log ------------------------------------------------------
+        private void DrawChat()
+        {
             GUILayout.Space(6);
             GUILayout.Label("Log", _head);
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.MinHeight(120));
             for (int i = 0; i < _s.Chat.Count; i++) GUILayout.Label(_s.Chat[i], _mono);
             GUILayout.EndScrollView();
 
-            // ---- chat -----------------------------------------------------
             GUILayout.BeginHorizontal();
             GUI.SetNextControlName("chatField");
             _chatDraft = GUILayout.TextField(_chatDraft ?? "", GUILayout.Height(22));
@@ -291,9 +360,6 @@ namespace TcgMultiplayer.Ui
                 if (enter) e.Use();
                 GUI.FocusControl("chatField");
             }
-
-            GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status + ".", _dim);
-            GUI.DragWindow(new Rect(0, 0, 10000, 20));
         }
 
         private static Vector3 PlayerPos()

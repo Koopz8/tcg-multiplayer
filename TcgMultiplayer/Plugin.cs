@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.8.0";
+        public const string Version = "0.9.0";
 
         private static Plugin _instance;
 
@@ -28,6 +28,8 @@ namespace TcgMultiplayer
         private static MelonPreferences_Entry<float> _pAnimSpeedScale;
         private static MelonPreferences_Entry<string> _pPanicKey;
         private static MelonPreferences_Entry<bool> _pLockStats;
+        private static MelonPreferences_Entry<bool> _pBackupSave;
+        private static MelonPreferences_Entry<bool> _pProtectGuest;
 
         public static int MaxPlayers { get { return _pMaxPlayers != null ? Mathf.Clamp(_pMaxPlayers.Value, 2, 8) : 4; } }
         public static string ToggleKeyName { get { return _pToggleKey != null ? _pToggleKey.Value : "F9"; } }
@@ -50,8 +52,8 @@ namespace TcgMultiplayer
             _pToggleKey = cat.CreateEntry("ToggleKey", "F9", "Overlay toggle key");
             _pMaxPlayers = cat.CreateEntry("MaxPlayers", 4, "Max players",
                 "Lobby size cap, 2-8. The bandwidth model is designed around 4.");
-            _pOpenOnStart = cat.CreateEntry("OpenOverlayOnStart", true, "Open overlay at startup",
-                "Handy while the mod is still a debug tool.");
+            _pOpenOnStart = cat.CreateEntry("OpenOverlayOnStart", false, "Open overlay at startup",
+                "Off by default so the game starts the way you expect. Press the toggle key when you want it.");
             _pSuppressInput = cat.CreateEntry("SuppressGameInputWhileOpen", true, "Suppress game input while overlay is open",
                 "Disables Rewired's input maps so typing in chat doesn't also drive the player.");
 
@@ -91,11 +93,36 @@ namespace TcgMultiplayer
                 + "change these; the host arbitrates and everyone converges. Everything NOT "
                 + "listed here stays private to each player.");
 
+            _pBackupSave = cat.CreateEntry("BackupSaveBeforeSession", true, "Back up the save before a session",
+                "Copies your save folder aside the first time you host or join. Five copies are kept. "
+                + "Leave this on — a crash mid-session is the one case the mod can't tidy up after itself.");
+
+            _pProtectGuest = cat.CreateEntry("GuestKeepsOwnProgression", true, "Guests keep their own progression",
+                "Visiting someone's island borrows their unlocks for the visit and gives you yours back "
+                + "when you leave, keeping anything you unlocked yourself. Turning this off means their "
+                + "unlocks follow you home permanently.");
+
             _machines = new MachineDirector(_session);
             _machines.Wallet.Configure(pWalletPrefixes.Value);
             _world = new WorldState(_session);
             _world.Configure(pWorldPrefixes.Value);
+            _world.ProtectGuestProgression = _pProtectGuest.Value;
             _overlay = new Overlay(_session, _avatars, _machines, _world) { Visible = _pOpenOnStart.Value };
+
+            // The save is copied aside before anyone connects, and a guest's own
+            // progression is stashed and put back around the visit. Both hang off
+            // the session lifecycle so every exit path is covered — the Leave
+            // button, a host that vanishes, and quitting the game outright.
+            _session.OnSessionBegan += isHost =>
+            {
+                if (_pBackupSave == null || _pBackupSave.Value) SaveGuard.BackupOnce();
+                if (!isHost) _world.BeginVisit();
+            };
+            _session.OnSessionEnded += () =>
+            {
+                _world.EndVisit();
+                SaveGuard.ArmForNextSession();
+            };
 
             _harmony = new HarmonyLib.Harmony("com.mason.tcgmultiplayer");
             try { _machines.ApplyPatches(_harmony); }
@@ -116,40 +143,52 @@ namespace TcgMultiplayer
                 + (_pPanicKey != null ? _pPanicKey.Value : "F11") + " releases every machine.");
         }
 
+        // Everything below runs every frame, and nothing above us catches what it
+        // throws. Each subsystem is isolated so one of them failing costs that
+        // feature rather than the player's game. See Guard.
         public override void OnUpdate()
         {
-            // Steam belongs to the game; wait for its SteamManager rather than
-            // initialising anything ourselves.
-            if (!_session.Ready && Time.realtimeSinceStartup >= _nextInitTry)
+            Guard.Run("input", () =>
             {
-                _nextInitTry = Time.realtimeSinceStartup + 2f;
-                if (_session.Init()) TryLaunchLobby();
-                else if (!_initTried) { _initTried = true; }
-            }
+                // Steam belongs to the game; wait for its SteamManager rather than
+                // initialising anything ourselves.
+                if (!_session.Ready && Time.realtimeSinceStartup >= _nextInitTry)
+                {
+                    _nextInitTry = Time.realtimeSinceStartup + 2f;
+                    if (_session.Init()) TryLaunchLobby();
+                    else if (!_initTried) { _initTried = true; }
+                }
 
-            if (Hotkeys.Down(ToggleKeyName))
-            {
-                _overlay.Visible = !_overlay.Visible;
-                ApplyInputLock();
-            }
+                if (Hotkeys.Down(ToggleKeyName))
+                {
+                    _overlay.Visible = !_overlay.Visible;
+                    ApplyInputLock();
+                }
 
-            if (Hotkeys.Down(_pPanicKey != null ? _pPanicKey.Value : "F11"))
-                _machines.ReleaseEverything();
+                if (Hotkeys.Down(_pPanicKey != null ? _pPanicKey.Value : "F11"))
+                    _machines.ReleaseEverything();
 
-            if (_overlay.Visible) FreeCursor();
-            _session.Tick();
-            _avatars.Tick();
-            _machines.Tick();
-            _world.Tick();
-            if (Time.frameCount % 600 == 0) CompatCheck.ReportOnce();
+                if (_overlay.Visible) FreeCursor();
+            });
+
+            Guard.Run("networking", () => _session.Tick());
+            Guard.Run("player bodies", () => _avatars.Tick());
+            Guard.Run("machines", () => _machines.Tick());
+            Guard.Run("world state", () => _world.Tick());
+
+            if (Time.frameCount % 600 == 0)
+                Guard.Run("health check", () => CompatCheck.ReportOnce());
         }
 
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)
         {
             // Scenes load additively and PLAYER is rebuilt, so every cached
             // transform and every cloned body is stale from here.
-            _avatars.OnSceneChanged();
-            _machines.OnSceneChanged();
+            Guard.Run("scene change", () =>
+            {
+                _avatars.OnSceneChanged();
+                _machines.OnSceneChanged();
+            });
         }
 
         public override void OnGUI()
@@ -157,9 +196,16 @@ namespace TcgMultiplayer
             // The trace showed an FSM re-issuing "Cursor LOCKED" every frame, so a
             // one-shot unlock loses the fight. OnGUI runs after every Update, so
             // reasserting here is what actually makes the overlay clickable.
-            if (_overlay.Visible) FreeCursor();
-            _avatars.DrawNameplates();
-            _overlay.Draw();
+            //
+            // Guarded separately from the overlay: an exception thrown out of OnGUI
+            // lands in the middle of Unity's own IMGUI pass, and taking the game's
+            // UI down with us is not an acceptable way to fail.
+            Guard.Run("nameplates", () =>
+            {
+                if (_overlay.Visible) FreeCursor();
+                _avatars.DrawNameplates();
+            });
+            Guard.Run("overlay", () => _overlay.Draw());
         }
 
         private static void FreeCursor()
@@ -170,10 +216,13 @@ namespace TcgMultiplayer
 
         public override void OnApplicationQuit()
         {
+            // Leave() first: it fires OnSessionEnded, which is what puts a guest's
+            // own progression back before the game gets a chance to save on the
+            // way out. The order matters more than it looks.
+            try { _session.Leave(); } catch (Exception ex) { Warn("Leave on quit failed: " + ex.Message); }
             try { _machines.ReleaseEverything(); } catch { }
             try { _avatars.DespawnAll(); } catch { }
-            try { _session.Leave(); } catch { }
-            InputLock.Set(false);
+            try { InputLock.Set(false); } catch { }
         }
 
         private void ApplyInputLock()

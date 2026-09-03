@@ -1,0 +1,69 @@
+MIT License
+
+Copyright (c) 2026 Mason
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+===============================================================================
+THIRD-PARTY COMPONENTS
+===============================================================================
+
+This mod is distributed as compiled code that it wrote itself. It does not
+contain, redistribute, or modify any part of The Coin Game.
+
+It runs on, and links against, the following, none of which are included in
+this download except where stated:
+
+  MelonLoader              Apache License 2.0
+                           https://github.com/LavaGang/MelonLoader
+                           Downloaded from its official release page by the
+                           installer, verified by SHA-256, and installed
+                           unmodified. Not redistributed here.
+
+  HarmonyX                 MIT License
+                           https://github.com/BepInEx/HarmonyX
+                           Supplied by MelonLoader.
+
+  Steamworks.NET           MIT License
+                           https://github.com/rlabrecque/Steamworks.NET
+                           Already shipped and initialised by The Coin Game.
+                           Referenced, not redistributed.
+
+  PlayMaker                Commercial Unity asset, by Hutong Games.
+                           Shipped with The Coin Game. Referenced at compile
+                           time only. Not redistributed, and not included in
+                           the source repository.
+
+  Unity engine assemblies  Referenced at compile time only. Not redistributed.
+
+
+===============================================================================
+THE COIN GAME
+===============================================================================
+
+The Coin Game is by devotid, published by Kwalee. This mod is an unofficial,
+unaffiliated fan project. It is not endorsed by, sponsored by, or connected
+with either of them.
+
+You need your own legally purchased copy of the game for any of this to do
+anything. Every player does.
+
+If the developer or publisher would prefer this not exist, or would prefer it
+work differently, that request wins and the mod comes down.
