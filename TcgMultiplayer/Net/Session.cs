@@ -32,6 +32,7 @@ namespace TcgMultiplayer.Net
     {
         public const string LobbyKeyMod = "tcgmp_version";
         public const string LobbyKeyHost = "tcgmp_host";
+        public const string LobbyKeyBuild = "tcgmp_build";
 
         public SessionState State { get; private set; }
         public CSteamID Lobby { get; private set; }
@@ -351,6 +352,7 @@ namespace TcgMultiplayer.Net
             Lobby = new CSteamID(cb.m_ulSteamIDLobby);
             SteamMatchmaking.SetLobbyData(Lobby, LobbyKeyMod, Plugin.Version);
             SteamMatchmaking.SetLobbyData(Lobby, LobbyKeyHost, SelfName);
+            SteamMatchmaking.SetLobbyData(Lobby, LobbyKeyBuild, CompatCheck.GameHash ?? "unknown");
             SteamMatchmaking.SetLobbyJoinable(Lobby, true);
             // LobbyEnter also fires for the creator, so peer setup happens there.
         }
@@ -364,6 +366,13 @@ namespace TcgMultiplayer.Net
             var hostVersion = SteamMatchmaking.GetLobbyData(Lobby, LobbyKeyMod);
             if (!string.IsNullOrEmpty(hostVersion) && hostVersion != Plugin.Version)
                 Log("WARNING: host runs TcgMultiplayer " + hostVersion + ", you run " + Plugin.Version);
+
+            var hostBuild = SteamMatchmaking.GetLobbyData(Lobby, LobbyKeyBuild);
+            if (!string.IsNullOrEmpty(hostBuild) && hostBuild != "unknown"
+                && CompatCheck.GameHash != null && hostBuild != CompatCheck.GameHash)
+                Log("WARNING: the host is on a different build of the game. "
+                    + "Machines and unlocks may not line up. Host " + hostBuild
+                    + ", you " + CompatCheck.GameHash);
 
             Log("In lobby " + Lobby.m_SteamID + (IsHost ? " (host)" : " (client)"));
             RefreshPeers();

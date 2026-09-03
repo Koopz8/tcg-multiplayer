@@ -100,6 +100,12 @@ namespace TcgMultiplayer.Game
 
                 _resolved = true;
                 Plugin.Log("Wallet guard: protecting " + _protected.Count + " economy globals of " + all.Length + ".");
+
+                CompatCheck.Set("economy globals", _protected.Count > 0, _protected.Count + " protected");
+                CompatCheck.Set("\"" + GlobalCoins + "\" global",
+                                HasGlobal(all, GlobalCoins), null);
+                CompatCheck.Set("\"" + GlobalTickets + "\" global",
+                                HasGlobal(all, GlobalTickets), null);
                 return _protected.Count > 0;
             }
             catch (Exception ex)
@@ -107,6 +113,13 @@ namespace TcgMultiplayer.Game
                 Plugin.Warn("Wallet guard could not read globals: " + ex.Message);
                 return false;
             }
+        }
+
+        private static bool HasGlobal(NamedVariable[] all, string name)
+        {
+            for (int i = 0; i < all.Length; i++)
+                if (all[i] != null && all[i].Name == name) return true;
+            return false;
         }
 
         private bool Matches(string name)
