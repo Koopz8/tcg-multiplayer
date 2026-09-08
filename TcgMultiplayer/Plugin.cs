@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.9.1";
+        public const string Version = "0.9.3";
 
         private static Plugin _instance;
 
@@ -30,6 +30,7 @@ namespace TcgMultiplayer
         private static MelonPreferences_Entry<bool> _pLockStats;
         private static MelonPreferences_Entry<bool> _pBackupSave;
         private static MelonPreferences_Entry<bool> _pProtectGuest;
+        private static MelonPreferences_Entry<string> _pSelfTestKey;
 
         public static int MaxPlayers { get { return _pMaxPlayers != null ? Mathf.Clamp(_pMaxPlayers.Value, 2, 8) : 4; } }
         public static string ToggleKeyName { get { return _pToggleKey != null ? _pToggleKey.Value : "F9"; } }
@@ -97,6 +98,10 @@ namespace TcgMultiplayer
                 "Copies your save folder aside the first time you host or join. Five copies are kept. "
                 + "Leave this on — a crash mid-session is the one case the mod can't tidy up after itself.");
 
+            _pSelfTestKey = cat.CreateEntry("SelfTestKey", "F10", "Self-test key",
+                "Runs the built-in checks and shows the result. Safe to press any time you "
+                + "aren't in a session.");
+
             _pProtectGuest = cat.CreateEntry("GuestKeepsOwnProgression", true, "Guests keep their own progression",
                 "Visiting someone's island borrows their unlocks for the visit and gives you yours back "
                 + "when you leave, keeping anything you unlocked yourself. Turning this off means their "
@@ -120,6 +125,10 @@ namespace TcgMultiplayer
             };
             _session.OnSessionEnded += () =>
             {
+                // Capture before the restore, so the report can say whether the
+                // player was still mid-visit when it ended — which is exactly the
+                // state a crash would have left them in.
+                SessionReport.Capture(_session, _machines, _world);
                 _world.EndVisit();
                 SaveGuard.ArmForNextSession();
             };
@@ -183,6 +192,13 @@ namespace TcgMultiplayer
 
             if (Hotkeys.Down(_pPanicKey != null ? _pPanicKey.Value : "F11"))
                 _machines.ReleaseEverything();
+
+            if (Hotkeys.Down(_pSelfTestKey != null ? _pSelfTestKey.Value : "F10"))
+            {
+                SelfTest.RunAll(_session, _machines, _world);
+                _overlay.Visible = true;
+                ApplyInputLock();
+            }
 
             if (_overlay.Visible) FreeCursor();
         }

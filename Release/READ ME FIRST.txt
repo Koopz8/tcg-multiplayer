@@ -1,6 +1,6 @@
 THE COIN GAME - MULTIPLAYER
 ===========================
-version 0.9.0
+version 0.9.3  (public beta)
 
 Play The Coin Game with friends. You share an island, take turns on the
 machines, watch each other play, and keep your own money.
@@ -24,6 +24,16 @@ Everyone playing needs to do this. Everyone needs their own copy of the game.
 
 PLAYING
 -------
+
+BEFORE ANYTHING ELSE: load your save, then press F10.
+
+That runs a self-check - the wire format, malformed packets, machine ids,
+the wallet guard, the save backup, and that visiting someone else's island
+gives your own progression back. It takes a couple of seconds. Press "Copy
+result" and send it over.
+
+It does not test Steam actually delivering packets between two machines.
+That's what we're all here to find out.
 
 Press F9 to open the panel.
 
@@ -101,9 +111,15 @@ Stuck in a machine and can't get out?   Press F11.
 Anything else - open the panel with F9. If part of the mod has switched
 itself off, it says so at the top, in words, with a button to try again.
 
-For a bug report, this file has everything needed:
+For a bug report, please send BOTH of these:
 
+  <game folder>\TcgMultiplayer_Reports\session_<date>_host.txt   (or _guest)
   <game folder>\MelonLoader\Latest.log
+
+The session report is written automatically every time you finish a session,
+and there's a "Copy report" button for it in the panel. It says how long you
+played, how the session ended, everyone's ping, and whether anything went
+wrong. Nothing is sent anywhere - it's a file on your disk you choose to send.
 
 Steam, right-click The Coin Game, Manage, Browse local files.
 

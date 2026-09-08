@@ -1,6 +1,58 @@
 CHANGELOG
 =========
 
+0.9.3 - public beta
+-------------------
+Added
+  * A session report, written automatically every time a session ends, into a
+    TcgMultiplayer_Reports folder next to the game. There's also a Copy button
+    in the panel. Last 20 are kept.
+
+    It records how long you played, whether you hosted or joined, how it ended,
+    everyone's ping and mod version, machines and events, physics mismatches,
+    payouts the wallet guard blocked, and whether your progression was put back
+    properly. Nothing is sent anywhere - it's a file on your disk that you
+    choose to send.
+
+    If you're testing: please send this along with the MelonLoader log, from
+    both sides of the session.
+
+  * The installer now notices if BepInEx is installed in the same game folder
+    and warns you. The other Coin Game mods use it, and two mod loaders in one
+    folder usually means the game starts with no mods at all and no hint why.
+
+0.9.2 - closed beta
+-------------------
+Added
+  * A self-check, on F10 or the button in the panel. It verifies the wire
+    format for every message type, that awkward names with accents and emoji
+    survive, that malformed packets are rejected instead of crashing, that
+    machine ids are stable and unique, that the wallet guard is armed, that
+    the save backup really writes files - and that a full visit to someone
+    else's island gives your own progression back afterwards, tested against
+    your real save in a couple of seconds.
+
+    There's a Copy result button so you can paste the outcome into a report.
+    It says at the bottom what it does NOT test, which is Steam actually
+    delivering packets between two machines. Only a real session tests that.
+
+Changed
+  * A peer sending malformed packets can no longer flood the log - after ten
+    it says so once and goes quiet. They're almost always just on a different
+    version.
+
+0.9.1
+-----
+  * Cut what the mod costs per frame. It was rebuilding its machine list
+    whenever the number of active state machines moved a little, and coin
+    pushers move it constantly - so on a busy machine it was walking about
+    4,500 of them twice, every two seconds. That's a hitch you can feel.
+  * Added a performance panel: frame rate, worst frame in the last second,
+    and exactly how many milliseconds the mod itself is using. If the game
+    stutters and that number is near zero, it isn't this.
+  * The save backup no longer tries to copy the game's own log file, which
+    is always open and always failed.
+
 0.9.0
 -----
 First build prepared for public release.

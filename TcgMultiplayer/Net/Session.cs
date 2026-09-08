@@ -21,6 +21,7 @@ namespace TcgMultiplayer.Net
         // Their wallet, for the scoreboard only. Nothing authoritative rides on this.
         public int Coins, Tickets, TicketsSession;
         public bool HasWallet;
+        public int BadPackets;
     }
 
     /// <summary>
@@ -73,6 +74,22 @@ namespace TcgMultiplayer.Net
 
         /// <summary>Same build of the game as the host? Null until we've been in a lobby.</summary>
         public string BuildMismatch { get; private set; }
+
+        // Counters for the end-of-session report. Cheap, and the difference
+        // between a tester saying "it went weird" and a tester handing over
+        // something you can act on.
+        public int PacketsSent, PacketsReceived;
+        public long BytesSent, BytesReceived;
+        public DateTime StartedAt;
+        public int PeakPeers;
+
+        /// <summary>How the session finished. Set by whichever path ended it.</summary>
+        public string EndReason { get; private set; }
+
+        public void NoteEndReason(string why)
+        {
+            if (string.IsNullOrEmpty(EndReason)) EndReason = why;
+        }
 
         private Callback<LobbyEnter_t> _cbLobbyEnter;
         private Callback<LobbyChatUpdate_t> _cbLobbyChat;
@@ -436,7 +453,8 @@ namespace TcgMultiplayer.Net
             _emptyLobbyReads = gone ? _emptyLobbyReads + 1 : 0;
             if (_emptyLobbyReads >= 2)
             {
-                Chat.Add("[!] The lobby is gone. Session ended.");
+                NoteEndReason("the lobby disappeared");
+                    Chat.Add("[!] The lobby is gone. Session ended.");
                 Log("Lobby empty or invalid on two consecutive checks — ending the session.");
                 Leave();
                 return;
@@ -445,7 +463,8 @@ namespace TcgMultiplayer.Net
 
             if (!_wasHostAtJoin && _hostId.IsValid() && !IsLobbyMember(_hostId))
             {
-                Chat.Add("[!] The host is no longer in the lobby. Session ended.");
+                NoteEndReason("the host vanished from the lobby");
+                    Chat.Add("[!] The host is no longer in the lobby. Session ended.");
                 Log("Host missing from lobby membership — ending the session.");
                 Leave();
                 return;
@@ -566,6 +585,12 @@ namespace TcgMultiplayer.Net
             // is allowed to conclude the lobby is dead.
             _nextLobbyWatchAt = _clock.Elapsed.TotalSeconds + 10.0;
 
+            StartedAt = DateTime.Now;
+            PacketsSent = PacketsReceived = 0;
+            BytesSent = BytesReceived = 0;
+            PeakPeers = 0;
+            EndReason = null;
+
             if (OnSessionBegan != null) OnSessionBegan(IsHost);
 
             RefreshPeers();
@@ -619,6 +644,7 @@ namespace TcgMultiplayer.Net
                 // and handing it out to the next joiner as though it were theirs.
                 if (!_wasHostAtJoin && who == _hostId)
                 {
+                    NoteEndReason("the host left");
                     Chat.Add("[!] The host left. Ending the session.");
                     Log("Host left the lobby — leaving.");
                     Leave();
@@ -636,7 +662,8 @@ namespace TcgMultiplayer.Net
         private void OnSteamDisconnected(SteamServersDisconnected_t cb)
         {
             if (State == SessionState.Offline) return;
-            Chat.Add("[!] Lost the connection to Steam. Session ended.");
+            NoteEndReason("lost the connection to Steam");
+                    Chat.Add("[!] Lost the connection to Steam. Session ended.");
             Log("SteamServersDisconnected — ending the session.");
             Leave();
         }
@@ -672,7 +699,8 @@ namespace TcgMultiplayer.Net
             // nothing to trigger the restore.
             if (State != SessionState.Offline && !_wasHostAtJoin && peer == _hostId)
             {
-                Chat.Add("[!] Lost the connection to the host. Session ended.");
+                NoteEndReason("lost the connection to the host");
+                    Chat.Add("[!] Lost the connection to the host. Session ended.");
                 Leave();
             }
         }
@@ -684,6 +712,9 @@ namespace TcgMultiplayer.Net
             var peer = Track(r.From);
             if (peer == null) return;
             peer.LastHeardAt = _clock.Elapsed.TotalSeconds;
+            PacketsReceived++;
+            BytesReceived += r.Data != null ? r.Data.Length : 0;
+            if (Peers.Count > PeakPeers) PeakPeers = Peers.Count;
 
             try
             {
@@ -813,7 +844,16 @@ namespace TcgMultiplayer.Net
             }
             catch (Exception ex)
             {
-                Plugin.Warn("Malformed packet from " + peer.Name + ": " + ex.Message);
+                // Rate-limited on purpose. A peer sending garbage — broken, on a
+                // different version, or being deliberate — could otherwise write
+                // a log line per packet for as long as they felt like it, which
+                // fills the disk and buries the entry that would explain it.
+                peer.BadPackets++;
+                if (peer.BadPackets <= 10)
+                    Plugin.Warn("Malformed packet from " + peer.Name + ": " + ex.Message);
+                else if (peer.BadPackets == 11)
+                    Plugin.Warn("Further malformed packets from " + peer.Name
+                                + " will not be logged. They are probably on a different version.");
             }
         }
 
@@ -834,7 +874,10 @@ namespace TcgMultiplayer.Net
             using (var w = new PacketWriter(op))
             {
                 if (fill != null) fill(w);
-                SteamTransport.Send(p.Id, w.ToArray(), channel, reliable);
+                var bytes = w.ToArray();
+                PacketsSent++;
+                BytesSent += bytes.Length;
+                SteamTransport.Send(p.Id, bytes, channel, reliable);
             }
         }
 
