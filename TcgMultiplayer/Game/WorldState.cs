@@ -162,6 +162,16 @@ namespace TcgMultiplayer.Game
             // Save just finished loading? This is where a pending visit is taken.
             if (_visitPending && !TryStash()) return;
 
+            ScanLocalChanges(true);
+        }
+
+        /// <summary>
+        /// Finds globals that changed on this machine since the last look. Split
+        /// out of Tick so the self-test can drive the real earn-detection path
+        /// rather than a lookalike written for the test.
+        /// </summary>
+        private void ScanLocalChanges(bool send)
+        {
             // Polling rather than hooking: unlocks are set from PlayMaker actions
             // scattered across the game, and half a second of latency on "the
             // arcade is now unlocked" is imperceptible.
@@ -191,6 +201,7 @@ namespace TcgMultiplayer.Game
                 // of the host's island does not.
                 if (_visiting) _earnedWhileVisiting.Add(v.Name);
 
+                if (!send) continue;
                 _session.SendWorldVar(v.Name, now);
                 ChangesSent++;
                 Plugin.Log("World change: " + v.Name + " = " + now);
@@ -392,6 +403,139 @@ namespace TcgMultiplayer.Game
                 sent++;
             }
             Plugin.Log("Sent world snapshot (" + sent + " values) to a joiner.");
+        }
+
+        // ------------------------------------------------------------ self-test
+
+        /// <summary>
+        /// Proves, against this machine's real save, that a visit gives your own
+        /// progression back.
+        ///
+        /// This is the property the whole mod is staked on, and until now the
+        /// only way to check it was to find a second person and a second copy of
+        /// the game. It runs entirely locally in a few milliseconds: stash, fake
+        /// a host pushing every value the other way, unlock one thing "yourself",
+        /// leave, and check what you're holding.
+        ///
+        /// The real values are captured before anything is touched and forced
+        /// back in a finally, so a failure reports rather than damages.
+        /// </summary>
+        internal bool SelfTestVisit(out string detail)
+        {
+            detail = "";
+            if (_session != null && _session.State != SessionState.Offline)
+            {
+                detail = "skipped — leave the session first";
+                return false;
+            }
+            if (!Resolve() || _vars.Count == 0)
+            {
+                detail = "skipped — world globals aren't readable yet (load a save first)";
+                return false;
+            }
+
+            var truth = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (var v in _vars)
+            {
+                try { truth[v.Name] = v.RawValue; } catch { }
+            }
+            if (truth.Count == 0) { detail = "skipped — couldn't read any globals"; return false; }
+
+            bool wasVisiting = _visiting, wasPending = _visitPending;
+            string earnedName = null;
+
+            try
+            {
+                _visiting = false; _visitPending = false;
+                _ownWorld.Clear(); _earnedWhileVisiting.Clear();
+
+                // 1. arrive
+                _visitPending = true;
+                if (!TryStash()) { detail = "FAILED — could not stash your progression"; return false; }
+                if (_ownWorld.Count != truth.Count)
+                {
+                    detail = "FAILED — stashed " + _ownWorld.Count + " of " + truth.Count + " values";
+                    return false;
+                }
+
+                // 2. the host's island lands on top of ours
+                foreach (var v in _vars) Apply(v.Name, Flip(v));
+
+                // 3. we unlock one thing ourselves, through the real detection path
+                var mine = _vars[_vars.Count / 2];
+                earnedName = mine.Name;
+                try { mine.RawValue = Flip(mine); } catch { }
+                ScanLocalChanges(false);
+                if (!_earnedWhileVisiting.Contains(earnedName))
+                {
+                    detail = "FAILED — a change you made yourself wasn't recorded as yours";
+                    return false;
+                }
+                object earnedValue = mine.RawValue;
+
+                // 4. go home
+                EndVisit();
+
+                // 5. check what we're holding
+                int wrong = 0; string firstWrong = null;
+                foreach (var kv in truth)
+                {
+                    NamedVariable v;
+                    if (!_byName.TryGetValue(kv.Key, out v) || v == null) continue;
+                    object now;
+                    try { now = v.RawValue; } catch { continue; }
+
+                    bool ok = kv.Key == earnedName ? Equals(now, earnedValue) : Equals(now, kv.Value);
+                    if (!ok) { wrong++; if (firstWrong == null) firstWrong = kv.Key; }
+                }
+
+                if (wrong > 0)
+                {
+                    detail = "FAILED — " + wrong + " of " + truth.Count
+                           + " values came back wrong (first: " + firstWrong + ")";
+                    return false;
+                }
+
+                detail = truth.Count + " values restored, 1 kept as earned";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                detail = "FAILED — " + ex.GetType().Name + ": " + ex.Message;
+                return false;
+            }
+            finally
+            {
+                // Whatever happened above, the player's own numbers go back.
+                try
+                {
+                    _applying = true;
+                    foreach (var kv in truth)
+                    {
+                        NamedVariable v;
+                        if (!_byName.TryGetValue(kv.Key, out v) || v == null) continue;
+                        try { v.RawValue = kv.Value; _last[kv.Key] = kv.Value; } catch { }
+                    }
+                }
+                catch { }
+                finally { _applying = false; }
+
+                _ownWorld.Clear();
+                _earnedWhileVisiting.Clear();
+                _visiting = wasVisiting;
+                _visitPending = wasPending;
+            }
+        }
+
+        private static object Flip(NamedVariable v)
+        {
+            switch (v.VariableType)
+            {
+                case VariableType.Bool: return !Convert.ToBoolean(v.RawValue);
+                case VariableType.Int: return Convert.ToInt32(v.RawValue) + 1;
+                case VariableType.Float: return Convert.ToSingle(v.RawValue) + 1f;
+                default: return v.RawValue;
+            }
         }
 
         public string DebugLine

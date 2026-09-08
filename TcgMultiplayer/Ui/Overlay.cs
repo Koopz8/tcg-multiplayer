@@ -252,6 +252,56 @@ namespace TcgMultiplayer.Ui
             GUILayout.Label("Backup: " + SaveGuard.Status, _dim);
             if (GUILayout.Button("Back up my save now", GUILayout.Height(22))) SaveGuard.Backup();
 
+            // ---- session report ---------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Last session report", _head);
+            GUILayout.Label(SessionReport.Status, _dim);
+            GUILayout.BeginHorizontal();
+            GUI.enabled = !string.IsNullOrEmpty(SessionReport.Last);
+            if (GUILayout.Button("Copy report", GUILayout.Height(22)))
+            {
+                try { GUIUtility.systemCopyBuffer = SessionReport.Last; }
+                catch (Exception ex) { Plugin.Warn("Copy failed: " + ex.Message); }
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+
+            // ---- self-test --------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Self-test", _head);
+            GUILayout.Label(SelfTest.Summary, _mono);
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Run checks", GUILayout.Height(22)))
+                SelfTest.RunAll(_s, _mc, _world);
+            GUI.enabled = SelfTest.HasRun;
+            if (GUILayout.Button("Copy result", GUILayout.Height(22)))
+            {
+                try { GUIUtility.systemCopyBuffer = SelfTest.Report(); }
+                catch (Exception ex) { Plugin.Warn("Copy failed: " + ex.Message); }
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+
+            if (SelfTest.HasRun)
+            {
+                foreach (var r in SelfTest.Results)
+                {
+                    var tag = r.Skipped ? "skip" : r.Ok ? " ok " : "FAIL";
+                    GUILayout.Label("[" + tag + "] " + r.Name
+                                  + (string.IsNullOrEmpty(r.Detail) ? "" : " — " + r.Detail),
+                                  r.Ok || r.Skipped ? _dim : _alert);
+                }
+                GUILayout.Label("Doesn't test Steam delivery or two people on one machine — "
+                              + "only a real session does that.", _dim);
+            }
+            else
+            {
+                GUILayout.Label("Checks the wire format, hostile packets, machine ids, the wallet "
+                              + "guard, the save backup, and that visiting gives your own "
+                              + "progression back. Takes a moment. Load a save first.", _dim);
+            }
+
             // ---- performance ------------------------------------------------
             GUILayout.Space(6);
             GUILayout.Label("Performance", _head);

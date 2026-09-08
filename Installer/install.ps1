@@ -21,7 +21,7 @@ $MlVersion      = "0.6.6"
 $MlUrl          = "https://github.com/LavaGang/MelonLoader/releases/download/v0.6.6/MelonLoader.x64.zip"
 $MlZipSha256    = "687B82605606E941CEFDC007B880B720922CC319BB70270064590D4038C3C0DB"
 $MlVersionDll   = "595DA98AE1C59B2D5DA8820A5398E0CB10940C21EAB01C89C07989FB063F1BFC"
-$ModVersion     = "0.9.1"
+$ModVersion     = "0.9.3"
 
 $ScriptPath = $MyInvocation.MyCommand.Path
 $Here       = Split-Path -Parent $ScriptPath
@@ -152,6 +152,22 @@ if (-not $canWrite) {
     exit 0
 }
 
+# ---------------------------------------------------------------- other loaders
+# The other Coin Game mods on Nexus use BepInEx, which hooks the game the same
+# way MelonLoader does. Two loaders both proxying the game's startup is a known
+# way to get a game that launches with no mods, or doesn't launch at all - and
+# the symptom gives no hint about the cause. Better to say so up front.
+$bepinex = @("winhttp.dll", "BepInEx") | Where-Object { Test-Path (Join-Path $game $_) }
+if ($bepinex) {
+    Warn "BepInEx is also installed here ($($bepinex -join ', '))."
+    Say  "  This mod uses MelonLoader. Two mod loaders in one game folder often"
+    Say  "  fight, and when they do the game usually just starts with no mods at all."
+    Say  ""
+    Say  "  If the game misbehaves after this, move the BepInEx folder and winhttp.dll"
+    Say  "  out of the game folder, then launch again. Installing anyway."
+    Say  ""
+}
+
 # ---------------------------------------------------------------- MelonLoader
 function Sha ($path) { (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToUpper() }
 
@@ -261,6 +277,7 @@ Say ""
 Say "  In game:"
 Say "    F9   open the multiplayer panel (host, join, chat, health)"
 Say "    F11  get unstuck - releases every machine you're holding"
+Say "    F10  run the self-check and show the result"
 if ($hasDumper) {
 Say "    F7   dump scene info, only if a bug report asks for it"
 }
