@@ -1,0 +1,74 @@
+[size=5][b]Play The Coin Game with a friend[/b][/size]
+
+You share an island. You walk around it together, you take turns on the machines, and you watch each other play. Your money stays yours.
+
+This is an unofficial fan mod. You each need your own copy of the game.
+
+[b]This is a public beta.[/b] It has been tested heavily by one person and only lightly with two. Please read the "Your save" section below before you install.
+
+[size=4][b]What it does[/b][/size]
+[list]
+[*]Two to four players over Steam's own networking. No servers, no port forwarding, no IP addresses. You host, hit Invite Friend, they join from the friends list.
+[*]You see each other move around properly, with real animation, not dots on a map.
+[*]Machines have an owner. If someone is on a cabinet it won't take your card, but you can stand there and watch them play it, coins and all, instead of being locked out of the room.
+[*]Everyone keeps their own money, tickets, prizes and inventory. Watching a friend win a jackpot doesn't pay you, and doesn't pay them twice.
+[*]Unlocks, doors and vehicles are shared while you play together, so the island opens up for everyone.
+[/list]
+
+[size=4][b]Installing[/b][/size]
+Download, extract anywhere, and double-click [b]INSTALL - double click me.bat[/b].
+
+It finds the game through Steam, installs MelonLoader 0.6.6 for you (verified against the official release), and puts the mod in place. Click Yes if Windows asks for permission - the game usually lives in Program Files.
+
+Everyone playing installs it, and everyone needs the same version. The mod checks, and will tell you if you don't match.
+
+There is an UNINSTALL.bat in the same folder that puts the game back to stock.
+
+[i]Note: the other Coin Game mods here use BepInEx, and this one uses MelonLoader. Two mod loaders in one folder often means the game starts with no mods at all. The installer warns you if it sees BepInEx.[/i]
+
+[size=4][b]Your save[/b][/size]
+Your save folder is copied aside automatically the first time you host or join. Five copies are kept, in a TcgMultiplayer_SaveBackups folder next to your save.
+
+When you visit someone else's island you see their unlocks while you are there, and your own progression is put back when you leave - keeping anything you unlocked yourself. The one gap is a crash mid-session, which is what the backup is for.
+
+Press [b]F10[/b] any time to run a built-in self-check. It verifies, against your own save, that a full visit gives your progression back. It takes a couple of seconds.
+
+[size=4][b]Achievements and leaderboards[/b][/size]
+While you are in a session, the mod blocks the game from submitting anything to Steam.
+
+This is deliberate. Spectating works by replaying your friend's round on your machine - without the block, their score would post to the leaderboard under your name. I was not willing to ship something that quietly pollutes the leaderboards.
+
+[b]Playing alone, with nobody connected, is completely untouched.[/b] Achievements and leaderboards work exactly as they always have.
+
+[size=4][b]Controls[/b][/size]
+[list]
+[*][b]F9[/b] - open the multiplayer panel
+[*][b]F10[/b] - run the self-check
+[*][b]F11[/b] - get unstuck, releases every machine you are holding
+[/list]
+All keys and settings are in MelonLoader's config, under TcgMultiplayer.
+
+[size=4][b]Known issues and limitations[/b][/size]
+[list]
+[*]Two to four players. Four is what the bandwidth is designed around.
+[*]No host migration. If the host leaves, the session ends for everyone. It ends cleanly and everyone keeps their own progression, but it ends.
+[*]NPCs are not synced. You will each see them doing their own thing.
+[*]Both players need the same version of the game. A Coin Game update will probably need a mod update.
+[*]Voice chat is not in. Use Discord.
+[*]This is a beta. The stranger corners of the game have not been tested with two people. Please report what you find.
+[/list]
+
+[size=4][b]Bug reports[/b][/size]
+The mod writes a session report every time you finish playing. Please send it along with your MelonLoader log. Both live in the game folder - Steam, right-click The Coin Game, Manage, Browse local files:
+[list]
+[*]TcgMultiplayer_Reports\session_....txt
+[*]MelonLoader\Latest.log
+[/list]
+If you can, send both files from [b]both[/b] players. Half a multiplayer bug usually is not enough to fix it.
+
+[size=4][b]Credits[/b][/size]
+MelonLoader by Lava Gang (Apache 2.0), downloaded from its official release page by the installer and installed unmodified. HarmonyX (MIT). Steamworks.NET by Riley Labrecque (MIT), already shipped with the game. Nothing from The Coin Game is redistributed here.
+
+The Coin Game is by devotid, published by Kwalee. This mod is unofficial and unaffiliated. I posted on the Steam discussion board before releasing, to ask whether they were happy for this to exist, and have not had a reply - so I am releasing it as an unofficial beta. If devotid or Kwalee would rather it did not exist, it comes down.
+
+The mod itself is MIT licensed - see LICENSE.txt in the download.
