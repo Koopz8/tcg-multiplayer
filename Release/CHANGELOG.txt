@@ -1,6 +1,19 @@
 CHANGELOG
 =========
 
+0.9.4
+-----
+Fixed
+  * Opening the panel didn't always stop your keypresses reaching the game, so
+    typing in chat could also walk your character. The check for the game's
+    input system ran once, and if it happened before the game had finished
+    starting up it gave up permanently. It now keeps trying, and says so in the
+    panel while it can't.
+
+  * The self-check reported "economy globals aren't readable" when it simply
+    hadn't looked yet. It now checks properly, and if your save really isn't
+    loaded it tells you to load it and press F10 again.
+
 0.9.3 - public beta
 -------------------
 Added

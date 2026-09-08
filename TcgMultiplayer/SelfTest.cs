@@ -272,8 +272,16 @@ namespace TcgMultiplayer
 
         private static string WalletHold(MachineDirector machines)
         {
-            if (machines == null || !machines.Wallet.Available)
-                return "skipped — economy globals aren't readable yet (load a save first)";
+            if (machines == null) return "skipped — machines aren't set up yet";
+
+            // Resolve first. The wallet guard only resolves lazily, during a
+            // session, so checking Available on its own reported "not readable"
+            // when the truth was "never asked" — a skip that every tester would
+            // have seen and reported as a problem.
+            machines.Wallet.Resolve();
+
+            if (!machines.Wallet.Available)
+                return "skipped — economy globals aren't readable yet (load your save, then press F10 again)";
 
             int before = machines.Wallet.Coins;
             int protectedCount = machines.Wallet.ProtectedCount;
