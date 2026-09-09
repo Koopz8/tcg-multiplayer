@@ -1,6 +1,21 @@
 CHANGELOG
 =========
 
+0.9.5
+-----
+Fixed
+  * Typing in chat could still walk your character. The previous fix wasn't
+    enough - two things were wrong underneath it.
+
+    The mod was looking for the game's input system in a way that only works
+    if one particular part of it is shaped the way the documentation says. It
+    isn't, on this build. It now looks several ways, including by type, so an
+    obfuscated or renamed internal doesn't defeat it.
+
+    And it only ever tried once each time you opened or closed the panel. The
+    game's input system isn't ready that early, so a single try usually missed.
+    It now keeps trying quietly in the background until it works.
+
 0.9.4
 -----
 Fixed

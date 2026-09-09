@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.9.4";
+        public const string Version = "0.9.5";
 
         private static Plugin _instance;
 
@@ -201,6 +201,10 @@ namespace TcgMultiplayer
             }
 
             if (_overlay.Visible) FreeCursor();
+
+            // Rewired isn't ready the moment the overlay first opens, so applying
+            // the lock is a per-frame job rather than a one-shot on toggle.
+            InputLock.Tick();
         }
 
         // Everything below runs every frame, and nothing above us catches what it
