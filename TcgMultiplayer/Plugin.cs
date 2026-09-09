@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.9.5";
+        public const string Version = "0.9.6";
 
         private static Plugin _instance;
 
@@ -55,8 +55,11 @@ namespace TcgMultiplayer
                 "Lobby size cap, 2-8. The bandwidth model is designed around 4.");
             _pOpenOnStart = cat.CreateEntry("OpenOverlayOnStart", false, "Open overlay at startup",
                 "Off by default so the game starts the way you expect. Press the toggle key when you want it.");
-            _pSuppressInput = cat.CreateEntry("SuppressGameInputWhileOpen", true, "Suppress game input while overlay is open",
-                "Disables Rewired's input maps so typing in chat doesn't also drive the player.");
+            // Key name kept from when this meant "while the panel is open", so
+            // nobody's existing config resets. What it does is narrower now.
+            _pSuppressInput = cat.CreateEntry("SuppressGameInputWhileOpen", true, "Suppress game input while typing",
+                "Stops your keypresses reaching the game while the caret is in the chat or lobby-ID "
+                + "box, so typing doesn't also walk your character. Only while you're actually typing.");
 
             _pSendRate = cat.CreateEntry("SnapshotHz", 15f, "Snapshot rate (Hz)",
                 "How often the local player's position is sent. 15 is plenty for walking speed.");
@@ -185,25 +188,31 @@ namespace TcgMultiplayer
             }
 
             if (Hotkeys.Down(ToggleKeyName))
-            {
                 _overlay.Visible = !_overlay.Visible;
-                ApplyInputLock();
-            }
 
             if (Hotkeys.Down(_pPanicKey != null ? _pPanicKey.Value : "F11"))
+            {
                 _machines.ReleaseEverything();
+                // The panic key means "give me my game back", so it also drops
+                // the input lock. If suppression ever sticks with the panel
+                // closed, this is the way out that doesn't involve task manager.
+                InputLock.Set(false);
+                InputLock.Tick();
+            }
 
             if (Hotkeys.Down(_pSelfTestKey != null ? _pSelfTestKey.Value : "F10"))
             {
                 SelfTest.RunAll(_session, _machines, _world);
                 _overlay.Visible = true;
-                ApplyInputLock();
             }
 
             if (_overlay.Visible) FreeCursor();
 
-            // Rewired isn't ready the moment the overlay first opens, so applying
-            // the lock is a per-frame job rather than a one-shot on toggle.
+            // Evaluated every frame rather than on toggle: what it depends on is
+            // whether the caret is in a text box, which changes without anything
+            // being toggled. Rewired also isn't ready the moment the panel first
+            // opens, so applying the lock has to keep retrying.
+            ApplyInputLock();
             InputLock.Tick();
         }
 
@@ -260,9 +269,21 @@ namespace TcgMultiplayer
             try { InputLock.Set(false); } catch { }
         }
 
+        /// <summary>
+        /// Suppress the game's input only while the player is actually typing
+        /// into one of the panel's boxes.
+        ///
+        /// It used to be "whenever the panel is open", which turned out to be the
+        /// wrong rule the moment the lock started working: disabling every
+        /// Rewired map stops the player moving AND stops the game's own menus
+        /// responding, so opening the panel looked exactly like the game had
+        /// hung. The point was only ever to keep WASD in the chat box.
+        /// </summary>
         private void ApplyInputLock()
         {
-            bool want = _overlay.Visible && (_pSuppressInput == null || _pSuppressInput.Value);
+            bool want = _overlay.Visible
+                        && _overlay.TypingInABox
+                        && (_pSuppressInput == null || _pSuppressInput.Value);
             InputLock.Set(want);
         }
 
