@@ -31,13 +31,26 @@ namespace TcgMultiplayer.Ui
 
         public bool Visible;
 
+        /// <summary>
+        /// True while the caret is in the chat or lobby-ID box.
+        ///
+        /// This is what game input is suppressed for — and only this. Suppressing
+        /// it for the whole time the panel is open disables every Rewired map at
+        /// once, which stops the player moving, stops the game's own menus
+        /// responding, and reads for all the world like the game has frozen.
+        /// Updated during Draw, because focus is only knowable inside OnGUI.
+        /// </summary>
+        public bool TypingInABox { get; private set; }
+
         public Overlay(Session s, AvatarDirector av, MachineDirector mc, WorldState world)
         { _s = s; _av = av; _mc = mc; _world = world; }
 
         public void Draw()
         {
-            if (!Visible) return;
+            if (!Visible) { TypingInABox = false; return; }
             EnsureStyles();
+            var focused = GUI.GetNameOfFocusedControl();
+            TypingInABox = focused == "chatField" || focused == "joinField";
             _rect = GUI.Window(WinId, _rect, DrawWindow, "TcgMultiplayer " + Plugin.Version);
         }
 
@@ -330,7 +343,8 @@ namespace TcgMultiplayer.Ui
             _showAdvanced = GUILayout.Toggle(_showAdvanced, "  Testing tools (no second player needed)");
             if (!_showAdvanced)
             {
-                GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status + ".", _dim);
+                GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status
+                          + (TypingInABox ? " — typing, so the game isn't listening" : "") + ".", _dim);
                 DrawChat();
                 GUI.DragWindow(new Rect(0, 0, 10000, 20));
                 return;
@@ -389,7 +403,8 @@ namespace TcgMultiplayer.Ui
             if (GUILayout.Button("Release everything (stuck in a machine?)", GUILayout.Height(22)))
                 _mc.ReleaseEverything();
 
-            GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status + ".", _dim);
+            GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status
+                          + (TypingInABox ? " — typing, so the game isn't listening" : "") + ".", _dim);
             DrawChat();
             GUI.DragWindow(new Rect(0, 0, 10000, 20));
         }

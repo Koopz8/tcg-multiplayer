@@ -1,6 +1,6 @@
 THE COIN GAME - MULTIPLAYER
 ===========================
-version 0.9.5  (public beta)
+version 0.9.6  (public beta)
 
 Play The Coin Game with friends. You share an island, take turns on the
 machines, watch each other play, and keep your own money.

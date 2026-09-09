@@ -1,6 +1,23 @@
 CHANGELOG
 =========
 
+0.9.6
+-----
+Fixed
+  * The game appeared to freeze when you opened the panel. It wasn't frozen -
+    0.9.5 finally got the input suppression working, and it was switching off
+    ALL of the game's controls for as long as the panel was open. That stops
+    you moving and stops the game's own menus responding, which looks exactly
+    like a hang.
+
+    It now only holds your keypresses back while the caret is actually in the
+    chat or lobby-ID box, which is all it was ever for. Open the panel and the
+    game still plays normally; click into chat and typing stays in chat. The
+    panel tells you which state you're in.
+
+  * F11 now also releases the input lock, so there's always a way back if
+    anything ever gets stuck.
+
 0.9.5
 -----
 Fixed
