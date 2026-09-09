@@ -1,6 +1,31 @@
 CHANGELOG
 =========
 
+0.9.8
+-----
+Fixed
+  * The mouse could wander off the game window while the panel was open, which
+    on a second monitor meant clicking the panel dropped you out of the game.
+    It's now held inside the window - still visible, still free to move, just
+    bounded by the game.
+
+    If you'd rather drag the pointer out to another screen, turn off "Keep the
+    cursor in the window" in MelonLoader's settings.
+
+  * Closing the panel hands the pointer straight back to the game rather than
+    leaving it confined.
+
+0.9.7
+-----
+Fixed
+  * The mouse pointer flickered while the panel was open. Something in the
+    game re-locks the cursor about forty times a second, and the mod was
+    unlocking it again just as often - you were watching the two of them
+    argue. It now stops the game taking the pointer in the first place while
+    the panel is open, so there's nothing to flicker.
+
+    The panel's Health section shows whether this is working.
+
 0.9.6
 -----
 Fixed

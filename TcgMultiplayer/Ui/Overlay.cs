@@ -333,6 +333,7 @@ namespace TcgMultiplayer.Ui
                 if (!c.Ok) GUILayout.Label("   MISSING: " + c.What
                                            + (string.IsNullOrEmpty(c.Detail) ? "" : " — " + c.Detail), _dim);
             GUILayout.Label("Steam stats: " + StatsLock.Status, _dim);
+            GUILayout.Label("Cursor: " + CursorGuard.Status, _dim);
 
             // ---- solo test harness ----------------------------------------
             // Folded away by default. It's genuinely useful — it's how most of

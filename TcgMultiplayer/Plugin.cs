@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.9.6";
+        public const string Version = "0.9.8";
 
         private static Plugin _instance;
 
@@ -31,6 +31,8 @@ namespace TcgMultiplayer
         private static MelonPreferences_Entry<bool> _pBackupSave;
         private static MelonPreferences_Entry<bool> _pProtectGuest;
         private static MelonPreferences_Entry<string> _pSelfTestKey;
+        private static MelonPreferences_Entry<bool> _pConfineCursor;
+        private bool _overlayWasVisible;
 
         public static int MaxPlayers { get { return _pMaxPlayers != null ? Mathf.Clamp(_pMaxPlayers.Value, 2, 8) : 4; } }
         public static string ToggleKeyName { get { return _pToggleKey != null ? _pToggleKey.Value : "F9"; } }
@@ -101,6 +103,11 @@ namespace TcgMultiplayer
                 "Copies your save folder aside the first time you host or join. Five copies are kept. "
                 + "Leave this on — a crash mid-session is the one case the mod can't tidy up after itself.");
 
+            _pConfineCursor = cat.CreateEntry("ConfineCursorToWindow", true, "Keep the cursor in the window",
+                "While the panel is open, the mouse stays inside the game window instead of "
+                + "wandering onto another monitor. Turn this off if you'd rather be able to drag "
+                + "the pointer out to a second screen.");
+
             _pSelfTestKey = cat.CreateEntry("SelfTestKey", "F10", "Self-test key",
                 "Runs the built-in checks and shows the result. Safe to press any time you "
                 + "aren't in a session.");
@@ -148,6 +155,14 @@ namespace TcgMultiplayer
                 && (_session.State == SessionState.InLobby || _machines.Rehearse.Playing);
             try { StatsLock.Apply(_harmony); }
             catch (Exception ex) { Warn("Stats lock failed: " + ex); }
+
+            // Blocks the game's cursor-lock while the panel is open, rather than
+            // undoing it every frame — see CursorGuard for why that flickered.
+            CursorGuard.ShouldHold = () => _overlay != null && _overlay.Visible;
+            CursorGuard.Desired = (_pConfineCursor == null || _pConfineCursor.Value)
+                ? CursorLockMode.Confined : CursorLockMode.None;
+            try { CursorGuard.Apply(_harmony); }
+            catch (Exception ex) { Warn("Cursor guard failed: " + ex); }
 
             BuildTickDelegates();
             CompatCheck.ComputeGameHash();
@@ -207,6 +222,8 @@ namespace TcgMultiplayer
             }
 
             if (_overlay.Visible) FreeCursor();
+            else if (_overlayWasVisible) CursorGuard.Release();   // hand the pointer back once
+            _overlayWasVisible = _overlay.Visible;
 
             // Evaluated every frame rather than on toggle: what it depends on is
             // whether the caret is in a text box, which changes without anything
@@ -252,9 +269,15 @@ namespace TcgMultiplayer
             Guard.Run("overlay", _doOverlay);
         }
 
+        /// <summary>
+        /// Puts the pointer back once. With the cursor guard patched in, nothing
+        /// takes it away again, so this settles instead of strobing — the
+        /// per-frame re-assert only matters as a fallback when the patch failed.
+        /// </summary>
         private static void FreeCursor()
         {
-            if (Cursor.lockState != CursorLockMode.None) Cursor.lockState = CursorLockMode.None;
+            var want = CursorGuard.Desired;
+            if (Cursor.lockState != want) Cursor.lockState = want;
             if (!Cursor.visible) Cursor.visible = true;
         }
 
