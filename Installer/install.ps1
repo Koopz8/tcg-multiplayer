@@ -21,7 +21,7 @@ $MlVersion      = "0.6.6"
 $MlUrl          = "https://github.com/LavaGang/MelonLoader/releases/download/v0.6.6/MelonLoader.x64.zip"
 $MlZipSha256    = "687B82605606E941CEFDC007B880B720922CC319BB70270064590D4038C3C0DB"
 $MlVersionDll   = "595DA98AE1C59B2D5DA8820A5398E0CB10940C21EAB01C89C07989FB063F1BFC"
-$ModVersion     = "0.9.6"
+$ModVersion     = "0.9.8"
 
 $ScriptPath = $MyInvocation.MyCommand.Path
 $Here       = Split-Path -Parent $ScriptPath
