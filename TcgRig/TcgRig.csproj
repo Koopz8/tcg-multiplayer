@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>TcgRig</RootNamespace>
+    <AssemblyName>TcgRig</AssemblyName>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!-- The Unity and Steamworks assemblies are built for the framework the game
+         uses. We only touch plain structs in them (Vector3, Mathf, CSteamID), so
+         loading them here is fine; silence the version-mismatch noise. -->
+    <NoWarn>$(NoWarn);CS0649;CS0414;CS0169;MSB3277;NU1701</NoWarn>
+    <AssemblySearchPaths>$(AssemblySearchPaths);..\TcgMultiplayer\libs</AssemblySearchPaths>
+  </PropertyGroup>
+
+  <!-- The real thing under test, linked rather than copied. If these files
+       change, the rig tests the change. -->
+  <ItemGroup>
+    <Compile Include="..\TcgMultiplayer\Net\Session.cs" Link="mod\Session.cs" />
+    <Compile Include="..\TcgMultiplayer\Net\Packet.cs" Link="mod\Packet.cs" />
+    <Compile Include="..\TcgMultiplayer\Net\SteamTransport.cs" Link="mod\SteamTransport.cs" />
+    <Compile Include="..\TcgMultiplayer\Net\ITransport.cs" Link="mod\ITransport.cs" />
+    <Compile Include="..\TcgMultiplayer\Net\ILobbyBackend.cs" Link="mod\ILobbyBackend.cs" />
+    <Compile Include="..\TcgMultiplayer\Game\PlayerRig.cs" Link="mod\PlayerRig.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="com.rlabrecque.steamworks.net">
+      <HintPath>..\TcgMultiplayer\libs\com.rlabrecque.steamworks.net.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>..\TcgMultiplayer\libs\UnityEngine.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>..\TcgMultiplayer\libs\UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

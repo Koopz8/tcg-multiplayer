@@ -91,13 +91,12 @@ namespace TcgMultiplayer.Net
             if (string.IsNullOrEmpty(EndReason)) EndReason = why;
         }
 
-        private Callback<LobbyEnter_t> _cbLobbyEnter;
-        private Callback<LobbyChatUpdate_t> _cbLobbyChat;
-        private Callback<GameLobbyJoinRequested_t> _cbJoinRequested;
-        private Callback<SteamNetworkingMessagesSessionRequest_t> _cbSessionRequest;
-        private Callback<SteamNetworkingMessagesSessionFailed_t> _cbSessionFailed;
-        private Callback<SteamServersDisconnected_t> _cbDisconnected;
-        private CallResult<LobbyCreated_t> _crLobbyCreated;
+        // Steam sits behind these two. In a real session they are the Steam
+        // implementations and nothing is different; in the test rig they are
+        // fakes, which is the only way this class has ever been run with a
+        // second peer at the other end.
+        private readonly ITransport _net;
+        private readonly ILobbyBackend _lobby;
 
         private CSteamID _hostId;
         private bool _wasHostAtJoin;
@@ -107,40 +106,50 @@ namespace TcgMultiplayer.Net
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private double _nextPingAt;
 
+        /// <summary>
+        /// Seconds elapsed, normally straight off the stopwatch above. The test
+        /// rig replaces it with a clock it controls, so the thirty-second peer
+        /// timeout and the stall detector can be exercised in a millisecond
+        /// instead of in real time. Nothing sets this in a real session.
+        /// </summary>
+        public Func<double> ClockOverride;
+
+        private double Now
+        {
+            get { return ClockOverride != null ? ClockOverride() : _clock.Elapsed.TotalSeconds; }
+        }
+
         public bool Ready { get; private set; }
 
         // ---------------------------------------------------------------- setup
 
+        /// <summary>The normal one: real Steam at both ends.</summary>
+        public Session() : this(SteamTransportBackend.Instance, new SteamLobbyBackend()) { }
+
+        /// <summary>For the test rig, which supplies a loopback pair instead.</summary>
+        public Session(ITransport transport, ILobbyBackend lobby)
+        {
+            _net = transport;
+            _lobby = lobby;
+        }
+
         public bool Init()
         {
-            if (!SteamBridge.Initialized)
-            {
-                Plugin.Warn("Steam is not initialised yet — will retry.");
-                return false;
-            }
+            if (!_lobby.Start()) return false;
 
-            try
-            {
-                SelfId = SteamUser.GetSteamID();
-                SelfName = SteamFriends.GetPersonaName();
+            SelfId = _lobby.SelfId;
+            SelfName = _lobby.SelfName;
 
-                _cbLobbyEnter = Callback<LobbyEnter_t>.Create(OnLobbyEnter);
-                _cbLobbyChat = Callback<LobbyChatUpdate_t>.Create(OnLobbyChatUpdate);
-                _cbJoinRequested = Callback<GameLobbyJoinRequested_t>.Create(OnJoinRequested);
-                _cbSessionRequest = Callback<SteamNetworkingMessagesSessionRequest_t>.Create(OnSessionRequest);
-                _cbSessionFailed = Callback<SteamNetworkingMessagesSessionFailed_t>.Create(OnSessionFailed);
-                _cbDisconnected = Callback<SteamServersDisconnected_t>.Create(OnSteamDisconnected);
-                _crLobbyCreated = CallResult<LobbyCreated_t>.Create(OnLobbyCreated);
+            _lobby.LobbyCreated = OnLobbyCreated;
+            _lobby.LobbyEntered = OnLobbyEnter;
+            _lobby.LobbyChatUpdate = OnLobbyChatUpdate;
+            _lobby.JoinRequested = OnJoinRequested;
+            _lobby.SessionRequest = OnSessionRequest;
+            _lobby.SessionFailed = OnSessionFailed;
+            _lobby.Disconnected = OnSteamDisconnected;
 
-                Ready = true;
-                Plugin.Log("Steam ready as " + SelfName + " (" + SelfId.m_SteamID + ")");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Plugin.Warn("Steam init failed: " + ex);
-                return false;
-            }
+            Ready = true;
+            return true;
         }
 
         // ------------------------------------------------------------- commands
@@ -152,8 +161,7 @@ namespace TcgMultiplayer.Net
             IsHost = true;
             _wasHostAtJoin = true;      // decided here, not inferred from Steam later
             Log("Creating lobby...");
-            var call = SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, maxPlayers);
-            _crLobbyCreated.Set(call);
+            _lobby.CreateLobby(maxPlayers);
         }
 
         public void Join(CSteamID lobby)
@@ -163,7 +171,7 @@ namespace TcgMultiplayer.Net
             IsHost = false;
             _wasHostAtJoin = false;
             Log("Joining lobby " + lobby.m_SteamID + "...");
-            SteamMatchmaking.JoinLobby(lobby);
+            _lobby.JoinLobby(lobby);
         }
 
         public void Leave()
@@ -188,13 +196,13 @@ namespace TcgMultiplayer.Net
                 try
                 {
                     Send(p, Op.Bye, null);
-                    SteamTransport.CloseSession(p.Id);
+                    _net.CloseSession(p.Id);
                     if (OnPeerGone != null) OnPeerGone(p.Id);
                 }
                 catch (Exception ex) { Log("Tidy-up for " + p.Name + " threw: " + ex.Message); }
             }
             Peers.Clear();
-            if (Lobby.IsValid()) SteamMatchmaking.LeaveLobby(Lobby);
+            if (Lobby.IsValid()) _lobby.LeaveLobby(Lobby);
             Lobby = default(CSteamID);
             State = SessionState.Offline;
             IsHost = false;
@@ -208,7 +216,7 @@ namespace TcgMultiplayer.Net
         public void OpenInviteOverlay()
         {
             if (State != SessionState.InLobby) return;
-            SteamFriends.ActivateGameOverlayInviteDialog(Lobby);
+            _lobby.OpenInviteOverlay(Lobby);
         }
 
         public void SendChat(string text)
@@ -229,7 +237,7 @@ namespace TcgMultiplayer.Net
                 WritePlayerState(w, st, seq);
                 var bytes = w.ToArray();
                 foreach (var p in Peers)
-                    SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelState, false);
+                    _net.Send(p.Id, bytes, SteamTransport.ChannelState, false);
             }
         }
 
@@ -287,7 +295,7 @@ namespace TcgMultiplayer.Net
                 // Reliable and ordered: a dropped machine event desyncs the cabinet
                 // for the rest of the round, unlike a dropped position snapshot.
                 foreach (var p in Peers)
-                    SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
+                    _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
             }
         }
 
@@ -304,14 +312,14 @@ namespace TcgMultiplayer.Net
                 w.U32(machineId).Bytes(payload);
                 var bytes = w.ToArray();
                 foreach (var p in Peers)
-                    SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelState, false);
+                    _net.Send(p.Id, bytes, SteamTransport.ChannelState, false);
             }
         }
 
         private Peer HostPeer()
         {
             if (!Lobby.IsValid()) return null;
-            var owner = SteamMatchmaking.GetLobbyOwner(Lobby);
+            var owner = _lobby.GetLobbyOwner(Lobby);
             for (int i = 0; i < Peers.Count; i++) if (Peers[i].Id == owner) return Peers[i];
             return null;
         }
@@ -326,7 +334,7 @@ namespace TcgMultiplayer.Net
                 w.I32(coins).I32(tickets).I32(session);
                 var bytes = w.ToArray();
                 foreach (var p in Peers)
-                    SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
+                    _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
             }
         }
 
@@ -355,13 +363,13 @@ namespace TcgMultiplayer.Net
                     foreach (var p in Peers)
                     {
                         if (onlyTo.HasValue && p.Id != onlyTo.Value) continue;
-                        SteamTransport.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
+                        _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
                     }
                 }
                 else
                 {
                     var host = HostPeer();
-                    if (host != null) SteamTransport.Send(host.Id, bytes, SteamTransport.ChannelControl, true);
+                    if (host != null) _net.Send(host.Id, bytes, SteamTransport.ChannelControl, true);
                 }
             }
         }
@@ -381,12 +389,12 @@ namespace TcgMultiplayer.Net
             if (!Ready || State == SessionState.Offline) return;
 
             _inbox.Clear();
-            SteamTransport.Poll(SteamTransport.ChannelControl, _inbox);
-            SteamTransport.Poll(SteamTransport.ChannelPing, _inbox);
-            SteamTransport.Poll(SteamTransport.ChannelState, _inbox);
+            _net.Poll(SteamTransport.ChannelControl, _inbox);
+            _net.Poll(SteamTransport.ChannelPing, _inbox);
+            _net.Poll(SteamTransport.ChannelState, _inbox);
             for (int i = 0; i < _inbox.Count; i++) Handle(_inbox[i]);
 
-            var now = _clock.Elapsed.TotalSeconds;
+            var now = Now;
             if (now >= _nextPingAt)
             {
                 _nextPingAt = now + 1.0;
@@ -438,7 +446,7 @@ namespace TcgMultiplayer.Net
             // notice they had gone. Keep re-resolving until it answers.
             if (!_hostId.IsValid())
             {
-                var owner = SteamMatchmaking.GetLobbyOwner(Lobby);
+                var owner = _lobby.GetLobbyOwner(Lobby);
                 if (owner.IsValid())
                 {
                     _hostId = owner;    // _wasHostAtJoin stays as Host()/Join() set it
@@ -449,7 +457,7 @@ namespace TcgMultiplayer.Net
             // Are we even still in this lobby? Steam answers honestly here even
             // when the chat-update callback never arrived — but one bad read
             // would tear a healthy lobby down for everyone, so it takes two.
-            bool gone = !Lobby.IsValid() || SteamMatchmaking.GetNumLobbyMembers(Lobby) == 0;
+            bool gone = !Lobby.IsValid() || _lobby.GetNumLobbyMembers(Lobby) == 0;
             _emptyLobbyReads = gone ? _emptyLobbyReads + 1 : 0;
             if (_emptyLobbyReads >= 2)
             {
@@ -482,7 +490,7 @@ namespace TcgMultiplayer.Net
 
                 Log(p.Name + " timed out after " + PeerTimeoutSeconds + "s of silence.");
                 Chat.Add("[!] " + p.Name + " timed out.");
-                SteamTransport.CloseSession(p.Id);
+                _net.CloseSession(p.Id);
                 if (OnPeerGone != null) OnPeerGone(p.Id);
                 Peers.RemoveAt(i);
 
@@ -492,44 +500,44 @@ namespace TcgMultiplayer.Net
 
         // ------------------------------------------------------------ callbacks
 
-        private void OnLobbyCreated(LobbyCreated_t cb, bool ioFailure)
+        private void OnLobbyCreated(ulong lobbyId, bool ok)
         {
-            if (ioFailure || cb.m_eResult != EResult.k_EResultOK)
+            if (!ok)
             {
-                Log("Lobby creation failed: " + (ioFailure ? "IO failure" : cb.m_eResult.ToString()));
+                Log("Lobby creation failed.");
                 State = SessionState.Offline;
                 IsHost = false;
                 return;
             }
-            Lobby = new CSteamID(cb.m_ulSteamIDLobby);
-            SteamMatchmaking.SetLobbyData(Lobby, LobbyKeyMod, Plugin.Version);
-            SteamMatchmaking.SetLobbyData(Lobby, LobbyKeyHost, SelfName);
-            SteamMatchmaking.SetLobbyData(Lobby, LobbyKeyBuild, CompatCheck.GameHash ?? "unknown");
-            SteamMatchmaking.SetLobbyJoinable(Lobby, true);
+            Lobby = new CSteamID(lobbyId);
+            _lobby.SetLobbyData(Lobby, LobbyKeyMod, Plugin.Version);
+            _lobby.SetLobbyData(Lobby, LobbyKeyHost, SelfName);
+            _lobby.SetLobbyData(Lobby, LobbyKeyBuild, CompatCheck.GameHash ?? "unknown");
+            _lobby.SetLobbyJoinable(Lobby, true);
             // LobbyEnter also fires for the creator, so peer setup happens there.
         }
 
-        private void OnLobbyEnter(LobbyEnter_t cb)
+        private void OnLobbyEnter(ulong lobbyId, uint enterResponse)
         {
             // Steam fires this for failed joins too — full, gone, banned, rate
             // limited. Taking it as success meant sitting in a lobby that does
             // not exist: Host greyed out, achievements suppressed for the rest
             // of the launch, and no explanation anywhere.
             const uint enterSuccess = 1;   // k_EChatRoomEnterResponseSuccess
-            if (cb.m_EChatRoomEnterResponse != enterSuccess)
+            if (enterResponse != enterSuccess)
             {
                 RefusedReason = "Steam wouldn't let you into that lobby (code "
-                                + cb.m_EChatRoomEnterResponse + "). It may be full, "
+                                + enterResponse + "). It may be full, "
                                 + "already closed, or the ID may be stale.";
-                Log("Lobby join rejected by Steam: response " + cb.m_EChatRoomEnterResponse);
+                Log("Lobby join rejected by Steam: response " + enterResponse);
                 State = SessionState.Offline;
                 Lobby = default(CSteamID);
                 return;
             }
 
-            Lobby = new CSteamID(cb.m_ulSteamIDLobby);
+            Lobby = new CSteamID(lobbyId);
             State = SessionState.InLobby;
-            _hostId = SteamMatchmaking.GetLobbyOwner(Lobby);
+            _hostId = _lobby.GetLobbyOwner(Lobby);
             IsHost = _hostId == SelfId;
 
             // _wasHostAtJoin is deliberately NOT derived from the owner read.
@@ -546,7 +554,7 @@ namespace TcgMultiplayer.Net
             // on would mean two games confidently misreading each other's packets
             // — and the symptoms would look like everything except the real cause.
             // Better to stop here and say exactly what is wrong.
-            var hostVersion = SteamMatchmaking.GetLobbyData(Lobby, LobbyKeyMod);
+            var hostVersion = _lobby.GetLobbyData(Lobby, LobbyKeyMod);
             if (!IsHost && !string.IsNullOrEmpty(hostVersion) && hostVersion != Plugin.Version)
             {
                 RefusedReason = "The host is running TcgMultiplayer " + hostVersion
@@ -567,7 +575,7 @@ namespace TcgMultiplayer.Net
             // either would throw, inside a Steam callback, outside every Guard,
             // and would abort the rest of this handler: no backup, no stash, no
             // handshake, and a player stuck in a lobby with no peers.
-            var hostBuild = SteamMatchmaking.GetLobbyData(Lobby, LobbyKeyBuild);
+            var hostBuild = _lobby.GetLobbyData(Lobby, LobbyKeyBuild);
             var myBuild = CompatCheck.GameHash;
             if (IsRealHash(hostBuild) && IsRealHash(myBuild) && hostBuild != myBuild)
             {
@@ -583,7 +591,7 @@ namespace TcgMultiplayer.Net
             // Membership and ownership can both read oddly for a second or two
             // right after entering. Give Steam time to settle before the watchdog
             // is allowed to conclude the lobby is dead.
-            _nextLobbyWatchAt = _clock.Elapsed.TotalSeconds + 10.0;
+            _nextLobbyWatchAt = Now + 10.0;
 
             StartedAt = DateTime.Now;
             PacketsSent = PacketsReceived = 0;
@@ -607,13 +615,13 @@ namespace TcgMultiplayer.Net
             return string.IsNullOrEmpty(h) ? "?" : (h.Length <= 8 ? h : h.Substring(0, 8));
         }
 
-        private void OnLobbyChatUpdate(LobbyChatUpdate_t cb)
+        private void OnLobbyChatUpdate(ulong lobbyId, ulong whoChanged, uint stateChange)
         {
-            if (new CSteamID(cb.m_ulSteamIDLobby) != Lobby) return;
-            var who = new CSteamID(cb.m_ulSteamIDUserChanged);
+            if (new CSteamID(lobbyId) != Lobby) return;
+            var who = new CSteamID(whoChanged);
 
             const uint entered = 1;   // k_EChatMemberStateChangeEntered
-            if ((cb.m_rgfChatMemberStateChange & entered) != 0)
+            if ((stateChange & entered) != 0)
             {
                 var p = Track(who);
                 if (p != null) { Log(p.Name + " joined."); SendHello(p); }
@@ -624,7 +632,7 @@ namespace TcgMultiplayer.Net
                 if (p != null)
                 {
                     Log(p.Name + " left.");
-                    SteamTransport.CloseSession(p.Id);
+                    _net.CloseSession(p.Id);
                     if (OnPeerGone != null) OnPeerGone(p.Id);
                     Peers.Remove(p);
                 }
@@ -651,7 +659,7 @@ namespace TcgMultiplayer.Net
                     return;
                 }
             }
-            IsHost = SteamMatchmaking.GetLobbyOwner(Lobby) == SelfId;
+            IsHost = _lobby.GetLobbyOwner(Lobby) == SelfId;
         }
 
         /// <summary>
@@ -659,7 +667,7 @@ namespace TcgMultiplayer.Net
         /// politely, so this has to end the session — it is the path that leaves
         /// a guest holding someone else's progression if it is missed.
         /// </summary>
-        private void OnSteamDisconnected(SteamServersDisconnected_t cb)
+        private void OnSteamDisconnected()
         {
             if (State == SessionState.Offline) return;
             NoteEndReason("lost the connection to Steam");
@@ -668,30 +676,28 @@ namespace TcgMultiplayer.Net
             Leave();
         }
 
-        private void OnJoinRequested(GameLobbyJoinRequested_t cb)
+        private void OnJoinRequested(CSteamID lobby)
         {
-            Log("Join request from " + SteamFriends.GetFriendPersonaName(cb.m_steamIDFriend));
+            Log("Join request for lobby " + lobby.m_SteamID);
             if (State != SessionState.Offline) Leave();
-            Join(cb.m_steamIDLobby);
+            Join(lobby);
         }
 
-        private void OnSessionRequest(SteamNetworkingMessagesSessionRequest_t cb)
+        private void OnSessionRequest(CSteamID peer)
         {
-            var peer = cb.m_identityRemote.GetSteamID();
             // Only talk to people who are actually in our lobby.
             if (Find(peer) == null && !IsLobbyMember(peer))
             {
                 Plugin.Warn("Refused session from non-member " + peer.m_SteamID);
                 return;
             }
-            SteamTransport.AcceptSession(peer);
+            _net.AcceptSession(peer);
             Track(peer);
         }
 
-        private void OnSessionFailed(SteamNetworkingMessagesSessionFailed_t cb)
+        private void OnSessionFailed(CSteamID peer, string why)
         {
-            var peer = cb.m_info.m_identityRemote.GetSteamID();
-            Log("Session failed with " + NameOf(peer) + ": " + cb.m_info.m_eEndReason);
+            Log("Session failed with " + NameOf(peer) + ": " + why);
 
             // Losing the transport to the host is losing the session, even though
             // Steam's lobby membership can outlive it by minutes. Left alone, a
@@ -711,7 +717,7 @@ namespace TcgMultiplayer.Net
         {
             var peer = Track(r.From);
             if (peer == null) return;
-            peer.LastHeardAt = _clock.Elapsed.TotalSeconds;
+            peer.LastHeardAt = Now;
             PacketsReceived++;
             BytesReceived += r.Data != null ? r.Data.Length : 0;
             if (Peers.Count > PeakPeers) PeakPeers = Peers.Count;
@@ -834,8 +840,13 @@ namespace TcgMultiplayer.Net
                         }
 
                         case Op.Bye:
+                            // Only from someone we actually shook hands with. A
+                            // single stray byte decoding as this opcode would
+                            // otherwise drop a live peer — and misdecoded traffic
+                            // is exactly what a version mismatch produces.
+                            if (!peer.Handshaked) break;
                             Log(peer.Name + " disconnected.");
-                            SteamTransport.CloseSession(peer.Id);
+                            _net.CloseSession(peer.Id);
                             if (OnPeerGone != null) OnPeerGone(peer.Id);
                             Peers.Remove(peer);
                             break;
@@ -859,7 +870,7 @@ namespace TcgMultiplayer.Net
 
         private void SendHello(Peer p)
         {
-            SteamTransport.AcceptSession(p.Id);
+            _net.AcceptSession(p.Id);
             SendOn(p, Op.Hello, SteamTransport.ChannelControl, true,
                    w => w.Str(SelfName).Str(Plugin.Version));
         }
@@ -877,7 +888,7 @@ namespace TcgMultiplayer.Net
                 var bytes = w.ToArray();
                 PacketsSent++;
                 BytesSent += bytes.Length;
-                SteamTransport.Send(p.Id, bytes, channel, reliable);
+                _net.Send(p.Id, bytes, channel, reliable);
             }
         }
 
@@ -885,10 +896,10 @@ namespace TcgMultiplayer.Net
 
         private void RefreshPeers()
         {
-            int n = SteamMatchmaking.GetNumLobbyMembers(Lobby);
+            int n = _lobby.GetNumLobbyMembers(Lobby);
             for (int i = 0; i < n; i++)
             {
-                var m = SteamMatchmaking.GetLobbyMemberByIndex(Lobby, i);
+                var m = _lobby.GetLobbyMemberByIndex(Lobby, i);
                 if (m != SelfId) Track(m);
             }
         }
@@ -896,9 +907,9 @@ namespace TcgMultiplayer.Net
         private bool IsLobbyMember(CSteamID who)
         {
             if (!Lobby.IsValid()) return false;
-            int n = SteamMatchmaking.GetNumLobbyMembers(Lobby);
+            int n = _lobby.GetNumLobbyMembers(Lobby);
             for (int i = 0; i < n; i++)
-                if (SteamMatchmaking.GetLobbyMemberByIndex(Lobby, i) == who) return true;
+                if (_lobby.GetLobbyMemberByIndex(Lobby, i) == who) return true;
             return false;
         }
 
@@ -913,7 +924,7 @@ namespace TcgMultiplayer.Net
             if (id == SelfId || !id.IsValid()) return null;
             var p = Find(id);
             if (p != null) return p;
-            p = new Peer { Id = id, Name = NameOf(id), LastHeardAt = _clock.Elapsed.TotalSeconds };
+            p = new Peer { Id = id, Name = NameOf(id), LastHeardAt = Now };
             Peers.Add(p);
             return p;
         }
@@ -924,13 +935,9 @@ namespace TcgMultiplayer.Net
             return (ushort)(a - b) < 0x8000;
         }
 
-        private static string NameOf(CSteamID id)
+        private string NameOf(CSteamID id)
         {
-            try
-            {
-                var n = SteamFriends.GetFriendPersonaName(id);
-                return string.IsNullOrEmpty(n) ? id.m_SteamID.ToString() : n;
-            }
+            try { return _lobby.NameOf(id); }
             catch { return id.m_SteamID.ToString(); }
         }
 
