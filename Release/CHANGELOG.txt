@@ -3,6 +3,15 @@ CHANGELOG
 
 0.9.8
 -----
+Changed
+  * The Nexus download is now a manual install - the mod file and nothing else.
+    You install MelonLoader yourself from melonloader.net and drag one folder
+    into the game. Updating is replacing one file; uninstalling is deleting it.
+
+    The one-click installer still exists and still works, it just isn't on the
+    public page. A download that runs a script on your machine is a lot to ask
+    of someone who has no reason to trust you yet.
+
 Fixed
   * The mouse could wander off the game window while the panel was open, which
     on a second monitor meant clicking the panel dropped you out of the game.

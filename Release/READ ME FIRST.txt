@@ -9,17 +9,62 @@ machines, watch each other play, and keep your own money.
 INSTALL
 -------
 
-1. Close The Coin Game if it's open.
-2. Double-click  "INSTALL - double click me.bat"
-3. If Windows asks whether to allow changes, click Yes. The game usually
-   lives in Program Files, and writing there needs permission.
-4. Launch from Steam as normal.
+Three steps. Ten minutes the first time, about thirty seconds every time
+after that.
 
-The installer finds the game on its own, installs MelonLoader for you, and
-puts the mod in place. If it can't find the game it'll ask, and tell you
-where to look.
 
-Everyone playing needs to do this. Everyone needs their own copy of the game.
+STEP 1 - find your game folder
+
+In Steam, right-click The Coin Game, then Manage, then Browse local files.
+A window opens on the folder with TheCoinGame.exe in it. Leave it open,
+you need it twice.
+
+
+STEP 2 - install MelonLoader
+
+MelonLoader is what lets mods run at all. It is not made by me. Get it from
+the official site:
+
+  https://melonloader.net
+
+Download MelonLoader.Installer.exe and run it.
+
+  - Click SELECT and point it at TheCoinGame.exe, in the folder from step 1
+  - Version:  v0.6.6      (not "Latest" - pick 0.6.6 from the list)
+  - Tick x64. Leave everything else alone.
+  - Click INSTALL
+
+Now launch the game once from Steam and let it reach the main menu. The
+first start is slow - MelonLoader is building its cache and can sit on a
+black screen for a minute or two. That is normal and only happens once.
+
+Quit the game when you see the menu.
+
+
+STEP 3 - drop the mod in
+
+Open the zip you downloaded. Inside is a folder called Mods.
+
+Drag that Mods folder into your game folder from step 1, next to
+TheCoinGame.exe. If Windows asks about merging, say yes - MelonLoader made
+a Mods folder in step 2 and you are adding a file to it.
+
+When you are done you should have:
+
+  <game folder>\Mods\TcgMultiplayer.dll
+
+If you have a Mods folder inside another Mods folder, drag it one level up.
+That is the only thing that usually goes wrong here.
+
+Launch from Steam as normal. Press F9. If the panel opens, you are done.
+
+
+Everyone playing needs to do all three steps, and everyone needs their own
+copy of the game.
+
+IF YOU ALREADY RUN OTHER COIN GAME MODS: most of them use BepInEx, and this
+one uses MelonLoader. Two mod loaders in one game folder usually means the
+game starts with no mods at all and no hint why. Pick one.
 
 
 PLAYING
@@ -108,6 +153,13 @@ IF SOMETHING GOES WRONG
 
 Stuck in a machine and can't get out?   Press F11.
 
+Nothing happens when you press F9?      The mod didn't load. Open
+                                        MelonLoader\Latest.log in the game
+                                        folder - the answer is in there,
+                                        usually near the bottom. Nine times
+                                        out of ten it's the nested Mods
+                                        folder from step 3.
+
 Anything else - open the panel with F9. If part of the mod has switched
 itself off, it says so at the top, in words, with a button to try again.
 
@@ -121,20 +173,27 @@ and there's a "Copy report" button for it in the panel. It says how long you
 played, how the session ended, everyone's ping, and whether anything went
 wrong. Nothing is sent anywhere - it's a file on your disk you choose to send.
 
-Steam, right-click The Coin Game, Manage, Browse local files.
-
 Please say what you were doing, whether you were hosting or joining, and
 what both of you saw - a lot of multiplayer bugs only make sense from both
 sides.
 
 
+UPDATING
+--------
+
+Delete Mods\TcgMultiplayer.dll and drop the new one in its place. You do not
+need to touch MelonLoader again.
+
+
 UNINSTALLING
 ------------
 
-Double-click UNINSTALL.bat. Your save is not touched.
+Delete Mods\TcgMultiplayer.dll. That removes the mod and leaves MelonLoader
+and anything else you run alone. Your save is not touched.
 
-Or let Steam do it: right-click the game, Properties, Installed Files,
-Verify integrity of game files.
+To remove MelonLoader as well, run MelonLoader.Installer.exe again and click
+UNINSTALL. Or let Steam do the whole job: right-click the game, Properties,
+Installed Files, Verify integrity of game files.
 
 
 ANTIVIRUS
@@ -150,8 +209,8 @@ CREDITS AND LICENCE
 -------------------
 
 See LICENSE.txt. Short version: the mod is MIT licensed, MelonLoader is
-Apache 2.0 and is downloaded from its official release page rather than
-bundled, and nothing from The Coin Game is redistributed here.
+Apache 2.0 and you install it yourself from its official site, and nothing
+from The Coin Game is redistributed here.
 
 The Coin Game is by devotid, published by Kwalee. This is an unofficial fan
 project with no connection to either.

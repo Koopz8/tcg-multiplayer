@@ -3,3 +3,4 @@ obj/
 *.user
 TcgFsmDump/libs/*.dll
 TcgMultiplayer/libs/*.dll
+dist/

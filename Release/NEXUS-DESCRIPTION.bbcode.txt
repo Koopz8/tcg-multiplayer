@@ -16,15 +16,32 @@ This is an unofficial fan mod. You each need your own copy of the game.
 [/list]
 
 [size=4][b]Installing[/b][/size]
-Download, extract anywhere, and double-click [b]INSTALL - double click me.bat[/b].
+Manual install. Three steps, about ten minutes the first time and thirty seconds every time after that.
 
-It finds the game through Steam, installs MelonLoader 0.6.6 for you (verified against the official release), and puts the mod in place. Click Yes if Windows asks for permission - the game usually lives in Program Files.
+[b]1 - Find your game folder.[/b]
+In Steam, right-click The Coin Game, then Manage, then Browse local files. That is the folder with TheCoinGame.exe in it. Leave the window open, you need it twice.
+
+[b]2 - Install MelonLoader.[/b]
+MelonLoader is what lets mods run at all. It is not made by me. Get MelonLoader.Installer.exe from the official site, [url=https://melonloader.net]melonloader.net[/url].
+
+Run it, click SELECT and point it at TheCoinGame.exe. Pick [b]v0.6.6[/b] from the version list - not "Latest". Tick [b]x64[/b]. Leave everything else alone and click INSTALL.
+
+Now launch the game once from Steam and let it reach the main menu. The first start is slow: MelonLoader is building its cache and can sit on a black screen for a minute or two. That is normal and only happens once. Quit when you see the menu.
+
+[b]3 - Drop the mod in.[/b]
+Open the zip. Inside is a folder called [b]Mods[/b]. Drag it into your game folder from step 1 and let Windows merge it. When you are done you should have:
+
+[code]<game folder>\Mods\TcgMultiplayer.dll[/code]
+
+If you end up with a Mods folder inside another Mods folder, drag it one level up. That is the only thing that usually goes wrong here.
+
+Launch from Steam and press [b]F9[/b]. If the panel opens, you are done.
+
+[b]Updating later:[/b] replace TcgMultiplayer.dll with the new one. [b]Uninstalling:[/b] delete it. MelonLoader stays put either way, and your save is never touched.
 
 Everyone playing installs it, and everyone needs the same version. The mod checks, and will tell you if you don't match.
 
-There is an UNINSTALL.bat in the same folder that puts the game back to stock.
-
-[i]Note: the other Coin Game mods here use BepInEx, and this one uses MelonLoader. Two mod loaders in one folder often means the game starts with no mods at all. The installer warns you if it sees BepInEx.[/i]
+[i]Note: the other Coin Game mods here use BepInEx, and this one uses MelonLoader. Two mod loaders in one game folder often means the game starts with no mods at all and no hint why. Pick one.[/i]
 
 [size=4][b]Your save[/b][/size]
 Your save folder is copied aside automatically the first time you host or join. Five copies are kept, in a TcgMultiplayer_SaveBackups folder next to your save.
@@ -66,8 +83,10 @@ The mod writes a session report every time you finish playing. Please send it al
 [/list]
 If you can, send both files from [b]both[/b] players. Half a multiplayer bug usually is not enough to fix it.
 
+Nothing is sent anywhere on its own. The session report is a plain text file on your disk that you choose to send.
+
 [size=4][b]Credits[/b][/size]
-MelonLoader by Lava Gang (Apache 2.0), downloaded from its official release page by the installer and installed unmodified. HarmonyX (MIT). Steamworks.NET by Riley Labrecque (MIT), already shipped with the game. Nothing from The Coin Game is redistributed here.
+MelonLoader by Lava Gang (Apache 2.0), which you install yourself from its official site - nothing to do with it is redistributed here. HarmonyX (MIT). Steamworks.NET by Riley Labrecque (MIT), already shipped with the game. Nothing from The Coin Game is redistributed here either.
 
 The Coin Game is by devotid, published by Kwalee. This mod is unofficial and unaffiliated. I posted on the Steam discussion board before releasing, to ask whether they were happy for this to exist, and have not had a reply - so I am releasing it as an unofficial beta. If devotid or Kwalee would rather it did not exist, it comes down.
 
