@@ -59,6 +59,14 @@ namespace TcgMultiplayer.Game
             public bool MadeKinematic;
 
             /// <summary>
+            /// Which transform we froze against. The body can be worked out
+            /// AFTER the first pose arrives, and freezing once against the old
+            /// answer means the wheels are never held at all — the exact case
+            /// that kept the tyres spinning.
+            /// </summary>
+            public Transform FrozenAgainst;
+
+            /// <summary>
             /// EVERY rigidbody in the vehicle, not just the one on its body.
             ///
             /// Teleporting the body twenty times a second while its wheels are
@@ -292,11 +300,16 @@ namespace TcgMultiplayer.Game
             // Whatever was driving this locally has to stop, or the game's own
             // graph and the incoming stream fight over the same transform and
             // the car shakes itself apart.
-            if (!t.MadeKinematic)
+            // Re-freeze if the body has changed since last time. The body is
+            // often worked out AFTER the first pose arrives, and freezing once
+            // against the old answer froze the control panel's rigidbodies and
+            // left the wheels free — which is precisely why the tyres kept
+            // spinning after the first fix.
+            if (!t.MadeKinematic || t.FrozenAgainst != m.Moving)
             {
+                RestoreBodies(t);
                 t.MadeKinematic = true;
-                t.Bodies.Clear();
-                t.WasKinematic.Clear();
+                t.FrozenAgainst = m.Moving;
                 try
                 {
                     var all = m.Moving.GetComponentsInChildren<Rigidbody>(true);
@@ -398,9 +411,17 @@ namespace TcgMultiplayer.Game
             Tracked t;
             if (!_spectated.TryGetValue(machineId, out t)) return;
 
-            // Put every one back the way it was, not simply "not kinematic" —
-            // some of them were kinematic to begin with and turning those loose
-            // drops parts of the vehicle on the floor.
+            RestoreBodies(t);
+            _spectated.Remove(machineId);
+        }
+
+        /// <summary>
+        /// Put every body back the way it was, not simply "not kinematic" —
+        /// some of them were kinematic to begin with, and turning those loose
+        /// drops parts of the vehicle on the floor.
+        /// </summary>
+        private static void RestoreBodies(Tracked t)
+        {
             for (int i = 0; i < t.Bodies.Count; i++)
             {
                 if (t.Bodies[i] == null) continue;
@@ -409,7 +430,6 @@ namespace TcgMultiplayer.Game
             }
             t.Bodies.Clear();
             t.WasKinematic.Clear();
-            _spectated.Remove(machineId);
         }
 
         public void ReleaseAll()

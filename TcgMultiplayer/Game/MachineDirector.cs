@@ -514,6 +514,26 @@ namespace TcgMultiplayer.Game
             if (m.LocallyOccupied) return;
             if (!m.SupportsFreeze) return;
 
+            // Third rule, learned from two windows: never freeze a VEHICLE.
+            //
+            // Freezing exists so a cabinet visibly refuses someone else's card.
+            // A vehicle's controller is not just a card reader — it is what the
+            // game drives the whole vehicle through, and "Machine Is Frozen" is
+            // a dead-end state in that graph. Putting a parked cart into it while
+            // another player is standing next to it locked THAT player in place:
+            // stuck while the cart sat still, free the moment its owner drove
+            // off, stuck again when it stopped. Exactly the pattern reported.
+            //
+            // Nothing is lost by skipping it. Ownership already refuses the
+            // claim, which is the whole point; the freeze was only ever the
+            // visible half of that.
+            if (m.IsMover)
+            {
+                Plugin.Log("Not freezing " + m.Label + " — it's a vehicle, and freezing one "
+                           + "traps whoever is standing near it.");
+                return;
+            }
+
             m.Frozen = true;
             SendToController(m, "FREEZE MACHINE");
         }
