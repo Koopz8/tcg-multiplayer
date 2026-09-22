@@ -338,6 +338,44 @@ namespace TcgMultiplayer.Ui
                 GUILayout.Label("Worst frame over 100 ms — that's a visible hitch. If the breakdown "
                               + "above is near zero, it isn't this mod.", _dim);
 
+            // ---- monitor ----------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Monitor", _head);
+            if (!DisplayManager.Supported)
+            {
+                if (GUILayout.Button("Look for monitors", GUILayout.Height(20)))
+                    DisplayManager.Refresh();
+                GUILayout.Label(DisplayManager.Status, _dim);
+            }
+            else
+            {
+                int here = DisplayManager.Current;
+                for (int i = 0; i < DisplayManager.Count; i++)
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label((i == here ? "> " : "   ") + DisplayManager.NameOf(i),
+                                    i == here ? _mono : _dim);
+                    GUILayout.FlexibleSpace();
+                    GUI.enabled = i != here;
+                    if (GUILayout.Button("Move here", GUILayout.Width(88), GUILayout.Height(20)))
+                        DisplayManager.MoveTo(i);
+                    GUI.enabled = true;
+                    GUILayout.EndHorizontal();
+                }
+
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("Remember this one", GUILayout.Height(22)))
+                    Plugin.RememberMonitor();
+                if (GUILayout.Button("Forget", GUILayout.Width(70), GUILayout.Height(22)))
+                    Plugin.ForgetMonitor();
+                GUILayout.EndHorizontal();
+
+                GUILayout.Label(DisplayManager.Status, _dim);
+                GUILayout.Label("The game has no monitor setting of its own, so this is the mod's. "
+                              + Plugin.NextMonitorKeyName + " cycles monitors even if you can't see "
+                              + "the game to open this panel.", _dim);
+            }
+
             // ---- health ---------------------------------------------------
             GUILayout.Space(6);
             GUILayout.Label("Health", _head);

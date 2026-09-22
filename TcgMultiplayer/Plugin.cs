@@ -22,6 +22,40 @@ namespace TcgMultiplayer
         /// "the new DLL never reached the game folder", and that is invisible
         /// otherwise — the version string looks identical either way.
         /// </summary>
+        public static string NextMonitorKeyName
+        {
+            get
+            {
+                var i = _instance;
+                return i != null && i._pDisplayKey != null ? i._pDisplayKey.Value : "F8";
+            }
+        }
+
+        /// <summary>Panel hooks. The manager does the work; these own the settings.</summary>
+        public static void RememberMonitor()
+        {
+            var i = _instance;
+            if (i == null) return;
+            DisplayManager.Remember((name, index) =>
+            {
+                if (i._pDisplayName != null) i._pDisplayName.Value = name;
+                if (i._pDisplayIndex != null) i._pDisplayIndex.Value = index;
+                MelonPreferences.Save();
+            });
+        }
+
+        public static void ForgetMonitor()
+        {
+            var i = _instance;
+            if (i == null) return;
+            DisplayManager.Forget((name, index) =>
+            {
+                if (i._pDisplayName != null) i._pDisplayName.Value = name;
+                if (i._pDisplayIndex != null) i._pDisplayIndex.Value = index;
+                MelonPreferences.Save();
+            });
+        }
+
         public static string BuildStamp
         {
             get
@@ -58,6 +92,10 @@ namespace TcgMultiplayer
 
         public static int MaxPlayers { get { return _pMaxPlayers != null ? Mathf.Clamp(_pMaxPlayers.Value, 2, 8) : 4; } }
         public static string ToggleKeyName { get { return _pToggleKey != null ? _pToggleKey.Value : "F9"; } }
+
+        private MelonPreferences_Entry<string> _pDisplayKey;
+        private MelonPreferences_Entry<string> _pDisplayName;
+        private MelonPreferences_Entry<int> _pDisplayIndex;
 
         private Session _session;
         private Overlay _overlay;
@@ -134,6 +172,17 @@ namespace TcgMultiplayer
                 "Runs the built-in checks and shows the result. Safe to press any time you "
                 + "aren't in a session.");
 
+            // The base game has no monitor setting, so the mod keeps one.
+            // Name first because it survives the monitor order changing; the
+            // index is only a fallback.
+            _pDisplayKey = cat.CreateEntry("NextMonitorKey", "F8", "Move to next monitor",
+                "Cycles the game window between monitors. Works without being able to see "
+                + "the game, which is the point of it.");
+            _pDisplayName = cat.CreateEntry("PreferredMonitorName", "", "Preferred monitor (name)",
+                "Set from the panel. Clear this if the game ever opens somewhere you can't see it.");
+            _pDisplayIndex = cat.CreateEntry("PreferredMonitorIndex", -1, "Preferred monitor (slot)",
+                "Fallback for when the name doesn't match. -1 means no preference.");
+
             _pProtectGuest = cat.CreateEntry("GuestKeepsOwnProgression", true, "Guests keep their own progression",
                 "Visiting someone's island borrows their unlocks for the visit and gives you yours back "
                 + "when you leave, keeping anything you unlocked yourself. Turning this off means their "
@@ -189,6 +238,9 @@ namespace TcgMultiplayer
             BuildTickDelegates();
             CompatCheck.ComputeGameHash();
             Health.NoteStart();
+            // Late on purpose — the game sets its own resolution while starting,
+            // and moving the window before it has finished just fights it.
+            DisplayManager.ScheduleStartupApply(6f);
             // Read once, early, and say so loudly: if the player has BepInEx in
             // the same folder they may well be reading this log precisely because
             // nothing loaded the last time they tried.
@@ -242,6 +294,12 @@ namespace TcgMultiplayer
                 InputLock.Set(false);
                 InputLock.Tick();
             }
+
+            DisplayManager.Tick(_pDisplayName != null ? _pDisplayName.Value : "",
+                                _pDisplayIndex != null ? _pDisplayIndex.Value : -1);
+
+            if (Hotkeys.Down(_pDisplayKey != null ? _pDisplayKey.Value : "F8"))
+                DisplayManager.MoveToNext();
 
             if (Hotkeys.Down(_pSelfTestKey != null ? _pSelfTestKey.Value : "F10"))
             {

@@ -25,6 +25,7 @@ namespace TcgRig
             var all = new System.Collections.Generic.List<Func<Check>>();
             all.AddRange(Scenarios.All);
             all.AddRange(DiagnosisScenarios.All);
+            all.AddRange(DisplayScenarios.All);
 
             foreach (var scenario in all)
             {
