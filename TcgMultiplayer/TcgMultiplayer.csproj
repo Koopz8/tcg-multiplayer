@@ -55,4 +55,29 @@
     </Reference>
   </ItemGroup>
 
+  <!-- Deploy. Without this, "build" and "deploy" are two separate manual steps,
+       and it is very easy to spend an evening testing a fortnight-old DLL.
+       Override the path if your Steam library lives elsewhere:
+           dotnet build -c Release -p:TcgGameDir="D:\SteamLibrary\steamapps\common\TheCoinGame"
+  -->
+  <PropertyGroup>
+    <TcgGameDir Condition="'$(TcgGameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\TheCoinGame</TcgGameDir>
+  </PropertyGroup>
+
+  <Target Name="DeployToGame" AfterTargets="Build">
+    <PropertyGroup>
+      <TcgGameFound Condition="Exists('$(TcgGameDir)\TheCoinGame.exe')">true</TcgGameFound>
+    </PropertyGroup>
+
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFolder="$(TcgGameDir)\Mods"
+          Condition="'$(TcgGameFound)' == 'true'"
+          ContinueOnError="WarnAndContinue" />
+
+    <Message Importance="high" Condition="'$(TcgGameFound)' == 'true'"
+             Text="  deployed -> $(TcgGameDir)\Mods\$(TargetFileName)" />
+    <Message Importance="high" Condition="'$(TcgGameFound)' != 'true'"
+             Text="  NOT deployed: no TheCoinGame.exe under $(TcgGameDir). Pass -p:TcgGameDir=... to point somewhere else." />
+  </Target>
+
 </Project>

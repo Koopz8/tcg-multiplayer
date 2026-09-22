@@ -16,6 +16,28 @@ namespace TcgMultiplayer
     {
         public const string Version = "0.9.8";
 
+        /// <summary>
+        /// When this DLL was written, read off the file itself. Shown in the
+        /// panel title because "I rebuilt and nothing changed" is nearly always
+        /// "the new DLL never reached the game folder", and that is invisible
+        /// otherwise — the version string looks identical either way.
+        /// </summary>
+        public static string BuildStamp
+        {
+            get
+            {
+                if (_buildStamp != null) return _buildStamp;
+                try
+                {
+                    var path = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                    _buildStamp = System.IO.File.GetLastWriteTime(path).ToString("d MMM HH:mm");
+                }
+                catch { _buildStamp = "?"; }
+                return _buildStamp;
+            }
+        }
+        private static string _buildStamp;
+
         private static Plugin _instance;
 
         private static MelonPreferences_Entry<string> _pToggleKey;

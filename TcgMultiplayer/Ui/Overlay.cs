@@ -51,7 +51,8 @@ namespace TcgMultiplayer.Ui
             EnsureStyles();
             var focused = GUI.GetNameOfFocusedControl();
             TypingInABox = focused == "chatField" || focused == "joinField";
-            _rect = GUI.Window(WinId, _rect, DrawWindow, "TcgMultiplayer " + Plugin.Version);
+            _rect = GUI.Window(WinId, _rect, DrawWindow,
+                               "TcgMultiplayer " + Plugin.Version + "  ·  built " + Plugin.BuildStamp);
         }
 
         private void EnsureStyles()
