@@ -232,7 +232,7 @@ namespace TcgMultiplayer
             // frame, so the avatar side has to be able to ask the machine side
             // where that vehicle is — while still working on its own if the
             // machine side never comes up.
-            _avatars.LocalAttachment = () => _machines.Ride.Current;
+            _avatars.LocalAttachment = () => _machines.CurrentAttachment;
             _avatars.AttachmentRoot = id =>
             {
                 Machine m;

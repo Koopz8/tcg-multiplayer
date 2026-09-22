@@ -592,6 +592,57 @@ namespace TcgMultiplayer.Game
             return _registry.TryGet(id, out m) ? m : null;
         }
 
+        /// <summary>
+        /// What the local player is aboard, for the avatar stream — as a
+        /// passenger OR as the driver.
+        ///
+        /// The driver case was missed first time round and it is the common one.
+        /// When you get into a vehicle the game parks the PLAYER object where
+        /// you were standing and drives the vehicle instead, so the rig's
+        /// position stops changing. Everyone else sees your body standing on the
+        /// pavement by the cart, frozen, while you drive away — which is exactly
+        /// what happened the first time two windows were ever connected.
+        ///
+        /// Treating the driver as attached at seat 0 fixes it with the machinery
+        /// that was already there for passengers.
+        /// </summary>
+        public Attachment CurrentAttachment
+        {
+            get
+            {
+                // Passenger first: if we're riding in someone else's vehicle
+                // that is where we are, whatever else we might own.
+                var riding = Ride.Current;
+                if (riding.Any)
+                {
+                    Machine rm;
+                    if (_registry.TryGet(riding.Machine, out rm))
+                    {
+                        riding.LocalPos = Seating.Offset(riding.Seat, rm.Extents);
+                        riding.LocalYaw = 0f;
+                    }
+                    return riding;
+                }
+
+                // Driving: only for things that travel. Standing at a coin
+                // pusher is not being inside it, and pinning a body to a
+                // cabinet's notional seat would look worse than leaving it be.
+                if (MyMachine == 0) return new Attachment();
+
+                Machine mine;
+                if (!_registry.TryGet(MyMachine, out mine)) return new Attachment();
+                if (!mine.IsMover || !mine.OwnedByMe) return new Attachment();
+
+                return new Attachment
+                {
+                    Machine = mine.Id,
+                    Seat = (byte)Seating.DriverSeat,
+                    LocalPos = Seating.Offset(Seating.DriverSeat, mine.Extents),
+                    LocalYaw = 0f,
+                };
+            }
+        }
+
         /// <summary>Can the local player get into this thing right now, and why not?</summary>
         public bool CanRide(Machine m, out string why)
         {
@@ -738,6 +789,18 @@ namespace TcgMultiplayer.Game
             // where it is does not get to overrule the wheel in our hands.
             if (m.OwnedByMe) return;
             if (m.Owner != 0 && m.Owner != from.m_SteamID) return;
+
+            // Being sent one of these IS the evidence that this thing travels.
+            // Without it each side has to watch its own copy move before it
+            // believes it — and a cart parked on our screen never will, so a
+            // guest would refuse to let anyone ride a vehicle it had not
+            // personally seen move.
+            if (!m.IsMover)
+            {
+                m.IsMover = true;
+                MoverReplicator.Measure(m);
+                Plugin.Log("Mover: " + m.Label + " travels (its driver said so).");
+            }
 
             Movers.Push(m, pose);
         }

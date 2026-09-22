@@ -8,6 +8,19 @@ namespace TcgMultiplayer.Game
     {
         public uint Machine;
         public byte Seat;
+
+        /// <summary>
+        /// Where to put the body, in the vehicle's own space.
+        ///
+        /// Carried here rather than measured off the player rig, because the
+        /// rig is exactly what stops being trustworthy the moment you get into
+        /// something. The game parks PLAYER where you were standing and drives
+        /// the vehicle instead, so reading the rig's position gives you the spot
+        /// on the pavement where you climbed in, forever.
+        /// </summary>
+        public Vector3 LocalPos;
+        public float LocalYaw;
+
         public bool Any { get { return Machine != 0; } }
     }
 

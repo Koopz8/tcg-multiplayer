@@ -115,8 +115,18 @@ namespace TcgMultiplayer.Game
 
             st.Attached = a.Machine;
             st.Seat = a.Seat;
-            st.Pos = root.InverseTransformPoint(st.Pos);
-            st.Yaw = Mathf.DeltaAngle(root.eulerAngles.y, st.Yaw);
+
+            // The seat, not the rig. Measuring off the rig is what put a frozen
+            // body on the pavement while the driver drove off: the game parks
+            // PLAYER where you got in and moves the vehicle instead, so the rig
+            // reports the same spot forever.
+            st.Pos = a.LocalPos;
+            st.Yaw = a.LocalYaw;
+
+            // Standing still in a seat, so the walk blend has to be told that
+            // rather than inferring it from a position that never changes.
+            st.VelX = 0f; st.VelZ = 0f; st.Turn = 0f;
+            st.Grounded = true; st.Running = false; st.Jumping = false;
             return st;
         }
 
