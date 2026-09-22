@@ -219,6 +219,78 @@ Physics frames go onto the Rehearsal tape too, so a coin pusher round can be
 recorded and replayed solo: the coins move from the recording while local physics
 is switched off, which is the same path a real spectator takes.
 
+### M9 — vehicles, and riding in one
+
+The two replication kinds above both had the same blind spot, and it took
+watching someone drive to see it. Event mirroring sends a machine's logic; for a
+car that is "engine on" and nothing about where it went. The rigidbody stream
+sends everything inside a machine *relative to that machine's own root*,
+quantised to a millimetre over a ±32.7 m box — which describes a car's wheels
+perfectly while saying nothing whatsoever about the car. So a friend driving past
+you was a body gliding along the road with the vehicle still parked in its bay.
+
+`MoverReplicator` is the missing third kind: the root itself, in world space,
+from whoever is driving. 30 bytes at 20 Hz — position and rotation as plain
+floats because the whole point is that it leaves the place it started, plus
+velocity so a spectator can carry it through the gap between packets. It
+*composes* with the other two rather than replacing them: this carries the car,
+the rigidbody stream carries the wheels relative to it, the event mirror carries
+the horn.
+
+One bug fell out of that composition immediately. `PhysicsReplicator.Gather` was
+including the root's own rigidbody, which is always at the origin of its own
+frame — a harmless no-op on a cabinet, and on a vehicle it wrote the car back to
+wherever it had been when the packet was unpacked, one frame after the world
+stream had moved it. Both ends now skip it, so the ordinals still line up.
+
+**Nothing names the vehicles.** `MoverTrack` watches every interactable's root
+and calls it a mover once it has been 2.5 m from where it was first seen. The
+game is PlayMaker graphs in scene assets and devotid can rename any object in any
+patch without it reading as a breaking change, so a list of vehicle names is a
+thing that silently stops being true. Watching is always true, and it picks up
+whatever a future update adds for free. The threshold is generous on purpose: a
+ride settling on its springs is not a road trip.
+
+**Riding along is the mod's, not the game's.** The game's model is one card, one
+machine, one player — so if a passenger enters a vehicle through the game, their
+copy starts being driven locally while the driver's stream is also writing to it,
+and the two tear it in half. Instead a passenger never touches the vehicle's
+graph: they are pinned to a seat every frame with their own rigidbody switched
+off. To the game, nothing has happened — the player just happens to be standing
+somewhere that moves. That is why it works on all four vehicles, the kart and the
+bus without one line of per-vehicle code.
+
+Two details that are load-bearing:
+
+- **A passenger's position is sent in the vehicle's frame, not the world's.**
+  Otherwise two independently-interpolated streams have to agree twenty times a
+  second about where a seat is, and they never quite do — the passenger shivers
+  in the seat and slides out of it on corners. Sent relatively, the offset is a
+  constant and the body is welded to the seat for free. Getting in or out changes
+  what the numbers *mean*, so `RemoteAvatar` cuts rather than blends across that
+  boundary.
+- **No reparenting.** A transform parented under a vehicle survives that vehicle
+  being deactivated, despawned or unloaded in ways that leave the player
+  somewhere unreachable. Re-pinning every frame stops the instant anything goes
+  wrong, which is the failure mode you want. For the same reason riding doesn't
+  touch the Rewired input lock: disabling the input maps would also kill the
+  game's own menus, and a passenger who can't open the pause menu thinks the game
+  has frozen.
+
+Capacity and seat positions are guessed from renderer bounds — two per row, front
+to back. Roughly right and never wrong beats exactly right until the next patch.
+
+Four separate things end a ride (you press F7, the driver gets out, the vehicle
+disappears, the session ends) and every one of them lands in the same
+`RideAlong.Leave`. Being stuck inside a vehicle is the worst thing this feature
+can do to someone, so there is exactly one way out and everything uses it. F11
+also works.
+
+The host arbitrates seating for the same reason it arbitrates ownership: two
+people reaching for the last seat in the same frame must not both get it. That
+rule is `Seating.Decide` — pure, no Unity, no network — and the rig sweeps 10,752
+boarding orders through it checking that nobody is ever in two seats at once.
+
 ### Settings
 
 `UserData\MelonPreferences.cfg`, section `[TcgMultiplayer]`:
@@ -235,6 +307,7 @@ is switched off, which is the same path a real spectator takes.
 | `AnimatorSpeedScale` | `1.0` | Multiplies what's fed to the walk/run blend. Raise it if remote bodies glide with barely-moving legs; lower it if they sprint on the spot. |
 | `SelfTestKey` | `F10` | Runs the built-in self-check. |
 | `ReleaseEverythingKey` | `F11` | Unstick: releases every machine you're holding, and the input lock. |
+| `RideAlongKey` | `F7` | Get into / out of a vehicle a friend is driving. |
 | `NextMonitorKey` | `F8` | Moves the game window to the next monitor. Works without being able to see the game. |
 | `PreferredMonitorName` | *(empty)* | Set from the panel. Blank this if the game ever opens somewhere you can't see it. |
 | `PreferredMonitorIndex` | `-1` | Fallback for when the monitor name doesn't match. |
@@ -408,10 +481,16 @@ clock the test controls. A thirty-second peer timeout costs a microsecond to exe
 
     dotnet run --project TcgRig -c Release
 
-39 scenarios, about 40 ms. It has already caught a stray byte decoding as `Op.Bye` and
+62 scenarios, about 75 ms. It has already caught a stray byte decoding as `Op.Bye` and
 silently dropping a live peer. It does **not** prove Steam delivers a byte between two
 houses, and there is only one world in it — see `TcgRig/README.md` for the full list of
 what a green run does and doesn't mean.
+
+Everything the rig tests is deliberately shaped so it *can* be: the decision lives in a
+pure class and the Unity glue is a thin shell over it. `Diagnosis`/`Health`,
+`DisplayChoice`/`DisplayManager`, `Seating`/`MachineDirector`, `MoverTrack`/
+`MoverReplicator`. The rule of thumb is that anything you'd otherwise have to reason
+about instead of run belongs on the left-hand side of one of those pairs.
 
 ## Building
 

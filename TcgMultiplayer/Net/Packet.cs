@@ -20,6 +20,9 @@ namespace TcgMultiplayer.Net
         WorldVar = 12,     // shared island progression: unlock, vehicle purchase
         WorldSync = 13,    // joiner -> host: send me the island as it stands
         MachinePhysics = 14, // owner -> spectators: quantised rigidbody poses
+        ObjectState = 15,  // owner -> everyone: a vehicle's world pose, so it actually drives
+        SeatRequest = 16,  // client -> host: let me ride in / get out of this thing
+        SeatGrant = 17,    // host -> all: who is sitting where
     }
 
     /// <summary>

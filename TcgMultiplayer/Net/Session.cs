@@ -60,6 +60,12 @@ namespace TcgMultiplayer.Net
         public Action<CSteamID> OnWorldSnapshotRequest;
         /// <summary>Rigidbody poses inside a machine someone else is playing.</summary>
         public Action<CSteamID, uint, byte[]> OnMachinePhysics;
+        /// <summary>Where a vehicle someone else is driving has got to.</summary>
+        public Action<CSteamID, uint, ObjectPose> OnObjectState;
+        /// <summary>Host only: someone wants a seat in something, or wants out of it.</summary>
+        public Action<CSteamID, uint, bool> OnSeatRequest;
+        /// <summary>The host's ruling on who is sitting where. Seat 0 is the driver.</summary>
+        public Action<uint, ulong[]> OnSeatGrant;
         /// <summary>A session has begun. Argument: true if we are the host.</summary>
         public Action<bool> OnSessionBegan;
         /// <summary>A session has ended, however it ended. Nothing may assume a clean exit.</summary>
@@ -247,7 +253,8 @@ namespace TcgMultiplayer.Net
              .F32(st.Pos.x).F32(st.Pos.y).F32(st.Pos.z)
              .F32(st.Yaw).F32(st.Pitch)
              .F32(st.VelX).F32(st.VelZ).F32(st.Turn)
-             .U8(st.Flags);
+             .U8(st.Flags)
+             .U32(st.Attached).U8(st.Seat);
         }
 
         public static Game.PlayerState ReadPlayerState(PacketReader r, out ushort seq)
@@ -261,6 +268,8 @@ namespace TcgMultiplayer.Net
             st.VelZ = r.F32();
             st.Turn = r.F32();
             st.Flags = r.U8();
+            st.Attached = r.U32();
+            st.Seat = r.U8();
             return st;
         }
 
@@ -313,6 +322,68 @@ namespace TcgMultiplayer.Net
                 var bytes = w.ToArray();
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelState, false);
+            }
+        }
+
+        // ------------------------------------------------------ moving objects
+
+        /// <summary>
+        /// A vehicle's pose, in world space.
+        ///
+        /// World space, and not quantised into the machine's own frame like the
+        /// coins are, because the whole point of a car is that it leaves the
+        /// place it started. Thirty bytes at 20 Hz is 600 B/s for the one thing
+        /// each player is driving, which is nothing next to the 18 KB/s a busy
+        /// coin pusher already costs.
+        /// </summary>
+        public struct ObjectPose
+        {
+            public UnityEngine.Vector3 Pos;
+            public UnityEngine.Quaternion Rot;
+            public UnityEngine.Vector3 Vel;
+        }
+
+        /// <summary>
+        /// Unreliable, like the rigidbody stream and for the same reason: a
+        /// dropped frame is a frame of interpolation, and a late one is worse
+        /// than no frame at all.
+        /// </summary>
+        public void SendObjectState(uint machineId, ObjectPose pose)
+        {
+            if (State != SessionState.InLobby || Peers.Count == 0) return;
+            using (var w = new PacketWriter(Op.ObjectState))
+            {
+                w.U32(machineId)
+                 .F32(pose.Pos.x).F32(pose.Pos.y).F32(pose.Pos.z)
+                 .F32(pose.Rot.x).F32(pose.Rot.y).F32(pose.Rot.z).F32(pose.Rot.w)
+                 .F32(pose.Vel.x).F32(pose.Vel.y).F32(pose.Vel.z);
+                var bytes = w.ToArray();
+                foreach (var p in Peers)
+                    _net.Send(p.Id, bytes, SteamTransport.ChannelState, false);
+            }
+        }
+
+        public void SendSeatRequest(uint machineId, bool leave)
+        {
+            var host = HostPeer();
+            if (host == null) return;
+            SendOn(host, Op.SeatRequest, SteamTransport.ChannelControl, true,
+                   w => w.U32(machineId).Bool(leave));
+        }
+
+        /// <summary>Reliable: a lost seat grant leaves someone welded to a car nobody is driving.</summary>
+        public void SendSeatGrant(uint machineId, ulong[] seats, CSteamID? onlyTo = null)
+        {
+            if (State != SessionState.InLobby || seats == null) return;
+            int n = Math.Min(seats.Length, Game.Seating.MaxSeats);
+            foreach (var p in Peers)
+            {
+                if (onlyTo.HasValue && p.Id != onlyTo.Value) continue;
+                SendOn(p, Op.SeatGrant, SteamTransport.ChannelControl, true, w =>
+                {
+                    w.U32(machineId).U8((byte)n);
+                    for (int i = 0; i < n; i++) w.U64(seats[i]);
+                });
             }
         }
 
@@ -836,6 +907,36 @@ namespace TcgMultiplayer.Net
                             uint mid = pr.U32();
                             var payload = pr.Bytes();
                             if (OnMachinePhysics != null) OnMachinePhysics(peer.Id, mid, payload);
+                            break;
+                        }
+
+                        case Op.ObjectState:
+                        {
+                            uint mid = pr.U32();
+                            var pose = new ObjectPose();
+                            pose.Pos = new UnityEngine.Vector3(pr.F32(), pr.F32(), pr.F32());
+                            pose.Rot = new UnityEngine.Quaternion(pr.F32(), pr.F32(), pr.F32(), pr.F32());
+                            pose.Vel = new UnityEngine.Vector3(pr.F32(), pr.F32(), pr.F32());
+                            if (OnObjectState != null) OnObjectState(peer.Id, mid, pose);
+                            break;
+                        }
+
+                        case Op.SeatRequest:
+                        {
+                            uint mid = pr.U32();
+                            bool leave = pr.Bool();
+                            if (OnSeatRequest != null) OnSeatRequest(peer.Id, mid, leave);
+                            break;
+                        }
+
+                        case Op.SeatGrant:
+                        {
+                            uint mid = pr.U32();
+                            int n = pr.U8();
+                            if (n > Game.Seating.MaxSeats) { peer.BadPackets++; break; }
+                            var seats = new ulong[n];
+                            for (int i = 0; i < n; i++) seats[i] = pr.U64();
+                            if (OnSeatGrant != null) OnSeatGrant(mid, seats);
                             break;
                         }
 

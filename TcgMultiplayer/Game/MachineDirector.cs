@@ -40,6 +40,17 @@ namespace TcgMultiplayer.Game
         public readonly Rehearsal Rehearse = new Rehearsal();
         public readonly PhysicsReplicator Physics = new PhysicsReplicator();
 
+        /// <summary>Vehicles: the world pose of whatever is being driven.</summary>
+        public readonly MoverReplicator Movers = new MoverReplicator();
+
+        /// <summary>The local player's seat in someone else's vehicle, if any.</summary>
+        public readonly RideAlong Ride = new RideAlong();
+
+        /// <summary>Set by Plugin. The avatar side owns the rig; seating needs to move it.</summary>
+        public Func<PlayerRig> RigSource;
+
+        private readonly List<ulong> _evacuated = new List<ulong>();
+
         // Set while we're replaying a mirrored event, so it isn't re-broadcast.
         private static bool _applying;
 
@@ -71,6 +82,9 @@ namespace TcgMultiplayer.Game
             _session.OnMachineOwner += OnOwnerAnnounced;
             _session.OnMachineEvent += OnMirroredEvent;
             _session.OnMachinePhysics += OnPhysics;
+            _session.OnObjectState += OnObjectState;
+            _session.OnSeatRequest += OnSeatRequest;
+            _session.OnSeatGrant += OnSeatGrant;
             _session.OnPeerGone += OnPeerGone;
             _live = this;
         }
@@ -159,10 +173,17 @@ namespace TcgMultiplayer.Game
         public void OnSceneChanged()
         {
             Physics.ReleaseAll();
+            Movers.ReleaseAll();
+            Ride.Leave(RigSource != null ? RigSource() : null, "the scene changed");
             _registry.Clear();
             _dirty = true;
             MyMachine = 0;
             _nextRebuildAt = Time.time + 3f;
+
+            // Classification is per-object and the objects are gone. Keeping it
+            // would mean a door in the new scene inheriting "is a vehicle" from
+            // whatever hashed to the same id in the old one.
+            Movers.ForgetClassification();
         }
 
         public void Tick()
@@ -251,7 +272,30 @@ namespace TcgMultiplayer.Game
                 }
             }
 
+            // Which of the 72 interactables actually travel. Recomputed at a
+            // gentle pace rather than once, because most of the island starts
+            // deactivated and a vehicle you have never walked near has never
+            // been in FsmList to watch.
+            Movers.Watch(_registry.All);
+
+            // The vehicle you are driving, in world space. Separate from the
+            // rigidbody stream above and sent alongside it: that one carries the
+            // wheels relative to the car, this one carries the car.
+            if (MyMachine != 0 && _session.State == SessionState.InLobby
+                && _session.Peers.Count > 0 && Movers.ShouldSend(Time.time))
+            {
+                Machine mine;
+                if (_registry.TryGet(MyMachine, out mine) && mine.OwnedByMe && mine.IsMover)
+                    _session.SendObjectState(mine.Id, Movers.Pack(mine));
+            }
+
+            // Vehicles first, then the things inside them: the wheels are packed
+            // relative to the body, so the body has to be in the right place
+            // before they are placed against it.
+            Movers.Render(LookupMachine);
             Physics.Render();
+
+            TickRide();
 
             if (Rehearse.Playing)
             {
@@ -374,12 +418,31 @@ namespace TcgMultiplayer.Game
             m.OwnedByMe = owner != 0 && owner == _session.SelfId.m_SteamID;
 
             if (m.Id == MyMachine && !m.OwnedByMe) MyMachine = 0;
-            if (m.OwnedByMe) { MyMachine = m.Id; Physics.ReleaseMachine(m.Id); }
+            if (m.OwnedByMe)
+            {
+                MyMachine = m.Id;
+                Physics.ReleaseMachine(m.Id);
+                Movers.Release(m.Id);            // we drive it now, nobody streams it to us
+            }
+
+            // Seat 0 follows ownership, always. The driver's seat is not
+            // something to be requested — it belongs to whoever holds the
+            // machine, and that is decided one place up.
+            if (m.Seats.Count > 0 || owner != 0) Seating.SetDriver(m.Seats, owner);
 
             if (owner == 0)
             {
                 Unfreeze(m);
                 Physics.ReleaseMachine(m.Id);    // local simulation resumes
+                Movers.Release(m.Id);
+
+                // Nobody is driving, so nobody is a passenger. Everyone gets put
+                // back on their feet rather than left pinned to a parked car.
+                Seating.Evacuate(m.Seats, _evacuated);
+                m.MySeat = -1;
+                if (Ride.Riding == m.Id)
+                    Ride.Leave(RigSource != null ? RigSource() : null, "the driver got out");
+
                 Plugin.Log("Machine free: " + m.Label);
             }
             else if (!m.OwnedByMe)
@@ -398,9 +461,18 @@ namespace TcgMultiplayer.Game
             // Never leave a cabinet locked because someone disconnected mid-round.
             foreach (var m in _registry.All)
             {
-                if (m.Owner != who.m_SteamID) continue;
-                Grant(m, 0, null);
-                if (_session.IsHost) _session.SendMachineOwner(m.Id, 0, null);
+                if (m.Owner == who.m_SteamID)
+                {
+                    Grant(m, 0, null);
+                    if (_session.IsHost) _session.SendMachineOwner(m.Id, 0, null);
+                    continue;
+                }
+
+                // A passenger who dropped out mid-drive leaves a seat behind
+                // that nothing else will ever free, and with it a car that can
+                // never be got into again.
+                if (Seating.Release(m.Seats, who.m_SteamID) < 0) continue;
+                if (_session.IsHost) _session.SendSeatGrant(m.Id, m.Seats.ToArray());
             }
         }
 
@@ -445,9 +517,21 @@ namespace TcgMultiplayer.Game
                     n++;
                 }
                 m.LocallyOccupied = false;
+                m.MySeat = -1;
+                m.Seats.Clear();
             }
             MyMachine = 0;
             Physics.ReleaseAll();
+            Movers.ReleaseAll();
+
+            // The panic key has to get you out of a moving vehicle too. Being
+            // stuck as a passenger is exactly the kind of stuck it exists for.
+            if (Ride.Riding != 0 || Ride.Pending != 0)
+            {
+                Ride.Leave(RigSource != null ? RigSource() : null, "panic key");
+                n++;
+            }
+
             if (n > 0) Plugin.Log("Released everything (" + n + " changes).");
             return n;
         }
@@ -497,6 +581,163 @@ namespace TcgMultiplayer.Game
                 live.MirroredEventsSent++;
             }
             catch { /* never let a hook take down the frame */ }
+        }
+
+        // --------------------------------------------------------- riding along
+
+        private Machine LookupMachine(uint id)
+        {
+            Machine m;
+            return _registry.TryGet(id, out m) ? m : null;
+        }
+
+        /// <summary>Can the local player get into this thing right now, and why not?</summary>
+        public bool CanRide(Machine m, out string why)
+        {
+            why = null;
+            if (m == null) { why = "nothing there"; return false; }
+            if (!m.IsMover) { why = "that doesn't go anywhere"; return false; }
+            if (_session.State != SessionState.InLobby) { why = "you're not in a session"; return false; }
+            if (m.OwnedByMe) { why = "you're driving it"; return false; }
+            if (m.Owner == 0) { why = "nobody is driving it — get in and drive"; return false; }
+            if (Seating.Used(m.Seats) >= m.Capacity) { why = "it's full"; return false; }
+            return true;
+        }
+
+        /// <summary>Ask to get in. The host decides which seat, or that there isn't one.</summary>
+        public void RequestRide(Machine m)
+        {
+            string why;
+            if (!CanRide(m, out why)) { Ride.Status = why; return; }
+
+            Ride.Pending = m.Id;
+            Ride.PendingSince = Time.time;
+            Ride.Status = "asking to get into " + m.Label + "...";
+
+            if (_session.IsHost) DecideSeat(_session.SelfId, m.Id, false);
+            else _session.SendSeatRequest(m.Id, false);
+        }
+
+        public void LeaveRide()
+        {
+            uint id = Ride.Riding != 0 ? Ride.Riding : Ride.Pending;
+            if (id == 0) return;
+
+            // Get out locally first and tell the host afterwards. Waiting for a
+            // round trip to stand up again is how someone ends up welded to a
+            // car while their connection decides what it thinks.
+            Ride.Leave(RigSource != null ? RigSource() : null, "you got out");
+
+            if (_session.State != SessionState.InLobby) return;
+            if (_session.IsHost) DecideSeat(_session.SelfId, id, true);
+            else _session.SendSeatRequest(id, true);
+        }
+
+        private void OnSeatRequest(CSteamID from, uint machineId, bool leave)
+        {
+            if (!_session.IsHost) return;
+            DecideSeat(from, machineId, leave);
+        }
+
+        private void DecideSeat(CSteamID who, uint machineId, bool leave)
+        {
+            Machine m;
+            if (!_registry.TryGet(machineId, out m)) return;
+
+            // The rule itself lives in Seating, where it can be tested. All this
+            // does is turn the ruling into packets.
+            var d = Seating.Decide(m.Seats, who.m_SteamID, m.Owner, m.IsMover, m.Capacity, leave);
+
+            if (!d.Ok)
+            {
+                Plugin.Log("Seat refused on " + m.Label + ": " + d.Ruling);
+                // Answer anyway, so the asker stops waiting on us rather than
+                // sitting on a pending request until it times out.
+                _session.SendSeatGrant(m.Id, m.Seats.ToArray(), who);
+                return;
+            }
+
+            ApplySeats(m, m.Seats.ToArray());
+            _session.SendSeatGrant(m.Id, m.Seats.ToArray());
+        }
+
+        private void OnSeatGrant(uint machineId, ulong[] seats)
+        {
+            Machine m;
+            if (!_registry.TryGet(machineId, out m)) return;
+            ApplySeats(m, seats);
+        }
+
+        /// <summary>
+        /// Adopt the host's seating for a machine, and move ourselves in or out
+        /// to match it. The host's list is the truth — if we think we're aboard
+        /// and it doesn't, we get out.
+        /// </summary>
+        private void ApplySeats(Machine m, ulong[] seats)
+        {
+            m.Seats.Clear();
+            if (seats != null) m.Seats.AddRange(seats);
+
+            int mine = Seating.SeatOf(m.Seats, _session.SelfId.m_SteamID);
+            m.MySeat = mine;
+
+            var rig = RigSource != null ? RigSource() : null;
+
+            if (mine > 0)
+            {
+                if (Ride.Riding != m.Id || Ride.Seat != mine)
+                {
+                    if (!Ride.Board(m, mine, rig))
+                        Ride.Status = "couldn't take the seat — the player rig isn't ready";
+                }
+            }
+            else if (Ride.Riding == m.Id)
+            {
+                Ride.Leave(rig, "the host says you're not in it");
+            }
+
+            if (Ride.Pending == m.Id && mine <= 0)
+            {
+                Ride.Pending = 0;
+                if (Ride.Riding == 0) Ride.Status = m.Label + " is full.";
+            }
+        }
+
+        /// <summary>
+        /// Every frame: hold the seat, and bail out the moment holding it stops
+        /// being safe. Four separate things end a ride and they all land here,
+        /// so there is no path that leaves someone stuck inside the scenery.
+        /// </summary>
+        private void TickRide()
+        {
+            var rig = RigSource != null ? RigSource() : null;
+
+            if (Ride.RequestExpired(Time.time))
+            {
+                Ride.Pending = 0;
+                Ride.Status = "no answer from the host — try again";
+            }
+
+            if (Ride.Riding == 0) return;
+
+            Machine m;
+            if (!_registry.TryGet(Ride.Riding, out m)) { Ride.Leave(rig, "the vehicle is gone"); return; }
+            if (m.Owner == 0) { Ride.Leave(rig, "the driver got out"); return; }
+            if (_session.State != SessionState.InLobby) { Ride.Leave(rig, "the session ended"); return; }
+            if (!Ride.Hold(m, rig)) Ride.Leave(rig, "lost the seat");
+        }
+
+        private void OnObjectState(CSteamID from, uint machineId, Session.ObjectPose pose)
+        {
+            Machine m;
+            if (!_registry.TryGet(machineId, out m)) return;
+
+            // If we own it we are the one driving, and someone else's idea of
+            // where it is does not get to overrule the wheel in our hands.
+            if (m.OwnedByMe) return;
+            if (m.Owner != 0 && m.Owner != from.m_SteamID) return;
+
+            Movers.Push(m, pose);
         }
 
         private void OnPhysics(CSteamID from, uint machineId, byte[] payload)

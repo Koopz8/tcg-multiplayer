@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.9.8";
+        public const string Version = "0.10.0";
 
         /// <summary>
         /// When this DLL was written, read off the file itself. Shown in the
@@ -93,6 +93,7 @@ namespace TcgMultiplayer
         public static int MaxPlayers { get { return _pMaxPlayers != null ? Mathf.Clamp(_pMaxPlayers.Value, 2, 8) : 4; } }
         public static string ToggleKeyName { get { return _pToggleKey != null ? _pToggleKey.Value : "F9"; } }
 
+        private static MelonPreferences_Entry<string> _pRideKey;
         private MelonPreferences_Entry<string> _pDisplayKey;
         private MelonPreferences_Entry<string> _pDisplayName;
         private MelonPreferences_Entry<int> _pDisplayIndex;
@@ -188,8 +189,25 @@ namespace TcgMultiplayer
                 + "when you leave, keeping anything you unlocked yourself. Turning this off means their "
                 + "unlocks follow you home permanently.");
 
+            _pRideKey = cat.CreateEntry("RideAlongKey", "F7", "Get in / out of a friend's vehicle",
+                "Walk up to something a friend is driving and press this to ride along. "
+                + "Press it again to get out. F11 also gets you out of anything.");
+
             _machines = new MachineDirector(_session);
             _machines.Wallet.Configure(pWalletPrefixes.Value);
+            _machines.RigSource = () => _avatars.Rig;
+
+            // The two halves find each other through delegates rather than
+            // references: a passenger's position is sent in their vehicle's
+            // frame, so the avatar side has to be able to ask the machine side
+            // where that vehicle is — while still working on its own if the
+            // machine side never comes up.
+            _avatars.LocalAttachment = () => _machines.Ride.Current;
+            _avatars.AttachmentRoot = id =>
+            {
+                Machine m;
+                return _machines.TryGetMachine(id, out m) && m.Root != null ? m.Root : null;
+            };
             _world = new WorldState(_session);
             _world.Configure(pWorldPrefixes.Value);
             _world.ProtectGuestProgression = _pProtectGuest.Value;
@@ -295,6 +313,9 @@ namespace TcgMultiplayer
                 InputLock.Tick();
             }
 
+            if (Hotkeys.Down(_pRideKey != null ? _pRideKey.Value : "F7"))
+                ToggleRide();
+
             DisplayManager.Tick(_pDisplayName != null ? _pDisplayName.Value : "",
                                 _pDisplayIndex != null ? _pDisplayIndex.Value : -1);
 
@@ -389,6 +410,39 @@ namespace TcgMultiplayer
         /// responding, so opening the panel looked exactly like the game had
         /// hung. The point was only ever to keep WASD in the chat box.
         /// </summary>
+        /// <summary>
+        /// One key for both directions. Riding is a thing you are or aren't, and
+        /// giving it a separate get-out key means someone standing next to a car
+        /// they're already in has to remember which is which.
+        /// </summary>
+        private void ToggleRide()
+        {
+            if (_machines.Ride.Riding != 0 || _machines.Ride.Pending != 0)
+            {
+                _machines.LeaveRide();
+                return;
+            }
+
+            var rig = _avatars.Rig;
+            if (rig == null || !rig.Valid) return;
+
+            // Whatever is nearest and rideable. Deliberately generous on range:
+            // you cannot stand on a moving car's bumper, so "near enough to get
+            // in" has to mean near enough to chase.
+            var near = _machines.Nearest(rig.Root.position, 8f);
+            string why;
+            if (_machines.CanRide(near, out why))
+            {
+                _machines.RequestRide(near);
+                _overlay.Visible = true;
+            }
+            else
+            {
+                _machines.Ride.Status = why ?? "nothing to get into here";
+                Log("Ride: " + _machines.Ride.Status);
+            }
+        }
+
         private void ApplyInputLock()
         {
             bool want = _overlay.Visible

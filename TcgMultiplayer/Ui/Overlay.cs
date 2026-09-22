@@ -371,6 +371,9 @@ namespace TcgMultiplayer.Ui
                                  ? "  ·  " + _mc.Physics.CountMismatches + " count mismatches" : ""), _dim);
             }
 
+            // ---- vehicles -------------------------------------------------
+            DrawVehicles();
+
             // ---- wallet ---------------------------------------------------
             GUILayout.Space(6);
             GUILayout.Label("Your wallet", _head);
@@ -581,6 +584,62 @@ namespace TcgMultiplayer.Ui
             GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status
                           + (TypingInABox ? " — typing, so the game isn't listening" : "") + ".", _dim);
             DrawChat();
+        }
+
+        /// <summary>
+        /// Vehicles, and getting into one someone else is driving.
+        ///
+        /// Which things count as vehicles is worked out by watching them move,
+        /// so this list fills in as you walk past them rather than being there
+        /// from the start. That is worth saying on screen — an empty list looks
+        /// broken otherwise.
+        /// </summary>
+        private void DrawVehicles()
+        {
+            GUILayout.Space(6);
+            GUILayout.Label("Vehicles and rides (" + _mc.Movers.Movers + ")", _head);
+
+            if (_mc.Movers.Movers == 0)
+            {
+                GUILayout.Label("Nothing has been seen moving yet. Anything that travels — the cart, "
+                              + "the cars, the kart, the bus — is spotted the first time it does.", _dim);
+            }
+
+            if (_mc.Ride.Active)
+            {
+                Machine riding;
+                var label = _mc.TryGetMachine(_mc.Ride.Riding, out riding) ? riding.Label : "something";
+                GUILayout.Label("You are riding in " + label + ", seat " + (_mc.Ride.Seat + 1) + ".", _mono);
+                if (GUILayout.Button("Get out", _btn, GUILayout.Height(22))) _mc.LeaveRide();
+            }
+            else
+            {
+                var near = _mc.Nearest(PlayerPos(), 8f);
+                string why;
+                bool can = _mc.CanRide(near, out why);
+
+                GUI.enabled = can;
+                if (GUILayout.Button(can ? "Ride along in " + near.Label : "Ride along",
+                                     _btn, GUILayout.Height(22)) && can)
+                    _mc.RequestRide(near);
+                GUI.enabled = true;
+
+                if (!can && !string.IsNullOrEmpty(why)) GUILayout.Label(why, _dim);
+            }
+
+            if (!string.IsNullOrEmpty(_mc.Ride.Status)) GUILayout.Label(_mc.Ride.Status, _dim);
+
+            // Who's aboard what. Only listed while someone actually is — four
+            // empty vehicles is noise.
+            foreach (var m in _mc.Machines)
+            {
+                if (!m.IsMover || Seating.Used(m.Seats) == 0) continue;
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(m.Label, _mono, GUILayout.Width(200));
+                GUILayout.Label(Seating.Used(m.Seats) + " of " + m.Capacity + " aboard"
+                              + (_mc.Movers.IsSpectating(m.Id) ? " · following" : ""), _dim);
+                GUILayout.EndHorizontal();
+            }
         }
 
         private void DrawChat()

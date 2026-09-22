@@ -1,6 +1,33 @@
 CHANGELOG
 =========
 
+0.10.0
+------
+Added
+  * Vehicles move. Before this, a friend driving the golf cart or the Lambo was
+    a body sliding along the road with the vehicle still parked where they
+    found it - the mod only ever sent what was going on INSIDE a machine, and
+    for a car that is the wheels, not the car. Whoever is driving now sends the
+    vehicle's actual position, so you can watch each other drive around.
+
+    Nothing is hardcoded about which things are vehicles. The mod watches what
+    moves and works it out, so anything that travels gets this - including
+    whatever a future game update adds.
+
+  * Ride along. Walk up to something a friend is driving and press F7 to get
+    in. Press it again to get out, and F11 still gets you out of everything.
+    How many fit depends on how big it is: two in the cart, three or four in a
+    car, a lot in the bus. The driver drives; passengers are along for the ride.
+
+    You are put back on your feet automatically if the driver gets out, if the
+    session ends, or if anything at all goes wrong - being stuck inside a
+    vehicle is the one failure this must never have.
+
+Fixed
+  * A rigidbody sitting on a machine's own root was being sent relative to
+    itself, which meant it was pinned in place. Harmless on a cabinet, and the
+    reason a vehicle would snap back a frame after moving.
+
 0.9.8
 -----
 Changed

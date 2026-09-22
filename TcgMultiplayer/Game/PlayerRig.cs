@@ -177,6 +177,19 @@ namespace TcgMultiplayer.Game
 
     public struct PlayerState
     {
+        /// <summary>
+        /// Where the body is. World space normally — but when <see cref="Attached"/>
+        /// is set this is in the vehicle's own space instead, and the receiver
+        /// resolves it against their copy of that vehicle.
+        ///
+        /// That swap is the whole trick. Sending a passenger's world position
+        /// while the car they are in is also being streamed means two
+        /// independently-interpolated streams have to agree, twenty times a
+        /// second, about where a seat is — and they never quite do, so the
+        /// passenger shivers in their seat and slides out of it on every corner.
+        /// Sent in the car's frame, the offset is a constant and the body is
+        /// welded to the seat for free.
+        /// </summary>
         public Vector3 Pos;
         public float Yaw;
         public float Pitch;
@@ -186,6 +199,11 @@ namespace TcgMultiplayer.Game
         public bool Grounded;
         public bool Running;
         public bool Jumping;
+
+        /// <summary>NetId of the vehicle or ride this player is aboard. 0 = on foot.</summary>
+        public uint Attached;
+        /// <summary>Which seat, when attached. 0 is the driver.</summary>
+        public byte Seat;
 
         public float Speed { get { return Mathf.Sqrt(VelX * VelX + VelZ * VelZ); } }
 

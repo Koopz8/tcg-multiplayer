@@ -24,6 +24,8 @@ namespace TcgMultiplayer.Game
             public float VelZ;
             public float Turn;
             public byte Flags;
+            /// <summary>Vehicle they were riding. When set, Pos/Yaw are in its frame.</summary>
+            public uint Attached;
         }
 
         public string Label;
@@ -73,14 +75,19 @@ namespace TcgMultiplayer.Game
             _snaps.Add(new Snap
             {
                 T = _lastRecv, Pos = st.Pos, Yaw = st.Yaw, Pitch = st.Pitch,
-                VelX = st.VelX, VelZ = st.VelZ, Turn = st.Turn, Flags = st.Flags
+                VelX = st.VelX, VelZ = st.VelZ, Turn = st.Turn, Flags = st.Flags,
+                Attached = st.Attached
             });
 
             // Keep a second of history; anything older can never be rendered.
             while (_snaps.Count > 2 && _snaps[0].T < _lastRecv - 1.0f) _snaps.RemoveAt(0);
         }
 
-        public void Render()
+        /// <summary>
+        /// <paramref name="attachmentRoot"/> turns a vehicle's NetId into that
+        /// vehicle's transform on this machine, or null if we don't have it.
+        /// </summary>
+        public void Render(Func<uint, Transform> attachmentRoot)
         {
             if (_tf == null || _snaps.Count == 0) return;
 
@@ -89,12 +96,12 @@ namespace TcgMultiplayer.Game
             // Not enough history yet, or we've stalled: hold the newest sample.
             if (_snaps.Count == 1 || renderAt >= _snaps[_snaps.Count - 1].T)
             {
-                Apply(_snaps[_snaps.Count - 1], 1f, _snaps[_snaps.Count - 1]);
+                Apply(_snaps[_snaps.Count - 1], 1f, _snaps[_snaps.Count - 1], attachmentRoot);
                 return;
             }
             if (renderAt <= _snaps[0].T)
             {
-                Apply(_snaps[0], 1f, _snaps[0]);
+                Apply(_snaps[0], 1f, _snaps[0], attachmentRoot);
                 return;
             }
 
@@ -106,12 +113,19 @@ namespace TcgMultiplayer.Game
 
                 float span = b.T - a.T;
                 float t = span > 0.0001f ? (renderAt - a.T) / span : 1f;
-                Apply(a, t, b);
+
+                // Getting into or out of a car changes what the numbers MEAN —
+                // world space one side, the car's own space the other. Blending
+                // across that boundary would fling the body between the seat and
+                // wherever the origin happens to be, so the change is a cut.
+                if (a.Attached != b.Attached) { Apply(b, 1f, b, attachmentRoot); return; }
+
+                Apply(a, t, b, attachmentRoot);
                 return;
             }
         }
 
-        private void Apply(Snap a, float t, Snap b)
+        private void Apply(Snap a, float t, Snap b, Func<uint, Transform> attachmentRoot)
         {
             var pos = Vector3.Lerp(a.Pos, b.Pos, t);
             float yaw = Mathf.LerpAngle(a.Yaw, b.Yaw, t);
@@ -119,9 +133,27 @@ namespace TcgMultiplayer.Game
             float velZ = Mathf.Lerp(a.VelZ, b.VelZ, t) * SpeedScale;
             float turn = Mathf.Lerp(a.Turn, b.Turn, t);
 
+            if (b.Attached != 0)
+            {
+                // Riding. Pos and Yaw are relative to the vehicle, so resolving
+                // them against our own copy of it welds the body to the seat —
+                // no matter how far apart the two streams have drifted, and
+                // without the passenger shivering on every corner.
+                var root = attachmentRoot != null ? attachmentRoot(b.Attached) : null;
+                if (root == null) return;   // don't have that vehicle: hold still rather than guess
+                _tf.position = root.TransformPoint(pos);
+                _tf.rotation = Quaternion.Euler(0f, root.eulerAngles.y + yaw, 0f);
+                ApplyAnimation(b, velX, velZ, turn);
+                return;
+            }
+
             _tf.position = pos;
             _tf.rotation = Quaternion.Euler(0f, yaw, 0f);
+            ApplyAnimation(b, velX, velZ, turn);
+        }
 
+        private void ApplyAnimation(Snap b, float velX, float velZ, float turn)
+        {
             if (_animator == null) return;
             if (!_bind.Any)
             {

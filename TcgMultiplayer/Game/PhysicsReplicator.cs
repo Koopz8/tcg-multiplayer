@@ -68,7 +68,15 @@ namespace TcgMultiplayer.Game
         {
             into.Clear();
             if (root == null) return;
-            Walk(root, into);
+
+            // The root's OWN rigidbody is deliberately skipped. Everything here
+            // is expressed relative to the root, so the root relative to itself
+            // is always the origin — harmless for a cabinet, and actively wrong
+            // for a vehicle, where writing that back pins the car to wherever it
+            // was when the packet was unpacked and undoes the world-space stream
+            // that is carrying it. Both ends skip it, so the indices still line
+            // up coin for coin.
+            for (int i = 0; i < root.childCount; i++) Walk(root.GetChild(i), into);
         }
 
         private static void Walk(Transform t, List<Rigidbody> into)

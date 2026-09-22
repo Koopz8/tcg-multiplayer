@@ -39,6 +39,29 @@ namespace TcgMultiplayer.Game
         public bool SupportsFreeze;
 
         public bool Frozen;
+
+        /// <summary>
+        /// Does this thing travel? Worked out by watching it, not from a list of
+        /// names — see MoverTrack. A mover has its world pose streamed by
+        /// whoever is driving, and can be ridden in.
+        /// </summary>
+        public bool IsMover;
+
+        /// <summary>
+        /// Who is aboard, by seat. Index 0 is the driver and mirrors Owner;
+        /// 1 and up are passengers, who never own anything. Empty for the 60-odd
+        /// cabinets nobody can ride.
+        /// </summary>
+        public readonly List<ulong> Seats = new List<ulong>();
+
+        /// <summary>Half-extents of the thing, for working out where seats are.</summary>
+        public Vector3 Extents = new Vector3(0.9f, 0.8f, 1.8f);
+        public bool MeasuredExtents;
+
+        public int Capacity { get { return Seating.Capacity(Extents); } }
+
+        /// <summary>Seat the local player is in, or -1.</summary>
+        public int MySeat = -1;
     }
 
     /// <summary>

@@ -39,6 +39,18 @@ namespace TcgMultiplayer.Game
         public int AvatarCount { get { return _avatars.Count; } }
         public bool RigReady { get { return _rig.Valid; } }
 
+        /// <summary>The local player rig. Seating needs to move it; nothing else writes to it.</summary>
+        public PlayerRig Rig { get { return _rig; } }
+
+        /// <summary>
+        /// Set by Plugin. What the local player is riding, and how to find any
+        /// vehicle by id. Injected rather than referenced because the avatar
+        /// side is built before the machine side and must keep working if the
+        /// machine side never comes up at all.
+        /// </summary>
+        public Func<Attachment> LocalAttachment;
+        public Func<uint, Transform> AttachmentRoot;
+
         public AvatarDirector(Session session)
         {
             _session = session;
@@ -61,7 +73,7 @@ namespace TcgMultiplayer.Game
             if (sending && Time.time >= _nextSendAt)
             {
                 _nextSendAt = Time.time + 1f / Mathf.Max(1f, SendRate);
-                var state = _rig.Sample();
+                var state = StampAttachment(_rig.Sample());
                 unchecked { _seq++; }
 
                 if (_session.State == SessionState.InLobby)
@@ -81,7 +93,31 @@ namespace TcgMultiplayer.Game
 
             DrainMirror();
 
-            foreach (var kv in _avatars) kv.Value.Render();
+            foreach (var kv in _avatars) kv.Value.Render(AttachmentRoot);
+        }
+
+        /// <summary>
+        /// If we're riding in something, rewrite the snapshot into that thing's
+        /// own frame before it goes out. Everything downstream — the wire, the
+        /// mirror, the remote body — then agrees on what the numbers mean, and
+        /// a passenger stays welded to their seat instead of being the result
+        /// of two interpolators trying to agree twenty times a second.
+        /// </summary>
+        private PlayerState StampAttachment(PlayerState st)
+        {
+            if (LocalAttachment == null) return st;
+
+            var a = LocalAttachment();
+            if (!a.Any) return st;
+
+            var root = AttachmentRoot != null ? AttachmentRoot(a.Machine) : null;
+            if (root == null) return st;     // can't express it relatively: send it as-is
+
+            st.Attached = a.Machine;
+            st.Seat = a.Seat;
+            st.Pos = root.InverseTransformPoint(st.Pos);
+            st.Yaw = Mathf.DeltaAngle(root.eulerAngles.y, st.Yaw);
+            return st;
         }
 
         private void DrainMirror()

@@ -26,6 +26,10 @@ namespace TcgRig
         public readonly List<PlayerState> States = new List<PlayerState>();
         public readonly List<string> OwnerRulings = new List<string>();
         public readonly List<string> Claims = new List<string>();
+        public readonly List<uint> PoseIds = new List<uint>();
+        public readonly List<Session.ObjectPose> Poses = new List<Session.ObjectPose>();
+        public readonly List<string> SeatRequests = new List<string>();
+        public readonly List<string> SeatGrants = new List<string>();
 
         public Peer PeerFor(ulong id)
         {
@@ -73,6 +77,10 @@ namespace TcgRig
             n.S.OnMachineOwner += (mid, owner, oname) => n.OwnerRulings.Add(mid + ":" + owner);
             n.S.OnMachineClaim += (who, mid, release) =>
                 n.Claims.Add(who.m_SteamID + ":" + mid + (release ? ":release" : ":claim"));
+            n.S.OnObjectState += (who, mid, pose) => { n.PoseIds.Add(mid); n.Poses.Add(pose); };
+            n.S.OnSeatRequest += (who, mid, leave) =>
+                n.SeatRequests.Add(who.m_SteamID + ":" + mid + (leave ? ":out" : ":in"));
+            n.S.OnSeatGrant += (mid, seats) => n.SeatGrants.Add(mid + ":" + string.Join(",", Array.ConvertAll(seats, x => x.ToString())));
 
             if (!n.S.Init()) throw new Exception("Init failed for " + name);
             Nodes.Add(n);

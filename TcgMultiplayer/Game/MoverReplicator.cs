@@ -1,0 +1,329 @@
+using System;
+using System.Collections.Generic;
+using TcgMultiplayer.Net;
+using UnityEngine;
+
+namespace TcgMultiplayer.Game
+{
+    /// <summary>
+    /// Vehicles: the golf cart, the two cars, the van, the Lambo, the superkart
+    /// and the bus.
+    ///
+    /// The mod already had two kinds of replication and neither of them could
+    /// carry a car. Event mirroring sends the machine's logic, which for a
+    /// vehicle is "engine on" and nothing about where it went. The rigidbody
+    /// stream sends everything inside a machine relative to that machine's own
+    /// root, quantised to a millimetre over a 32-metre box — perfect for coins
+    /// in a pusher, and for a car it describes the wheels beautifully while
+    /// saying nothing at all about the car. So a friend driving past you was a
+    /// body sliding along the road with the vehicle still parked in its bay.
+    ///
+    /// This is the missing third kind: the root itself, in world space, from
+    /// whoever is driving. It composes with the other two rather than replacing
+    /// them — this carries the car, the rigidbody stream carries the wheels
+    /// relative to it, the event mirror carries the horn.
+    ///
+    /// Only the thing you are driving is streamed, and only while you are
+    /// driving it, which is the same interest management the cabinets get for
+    /// free: one machine at a time, per player.
+    /// </summary>
+    internal sealed class MoverReplicator
+    {
+        /// <summary>Owner-side send rate. Cars turn faster than coin pushers settle.</summary>
+        public float SendRate = 20f;
+
+        /// <summary>
+        /// Render this far in the past, so there is always a real sample ahead
+        /// to interpolate toward. Slightly longer than the avatar delay:
+        /// a vehicle that stutters is much more obvious than a body that does.
+        /// </summary>
+        public static float InterpDelay = 0.15f;
+
+        /// <summary>Hard cap on guessing ahead when the stream stalls.</summary>
+        public const float MaxExtrapolate = 0.4f;
+
+        public int PosesSent, PosesApplied, Movers;
+
+        private struct Snap
+        {
+            public float T;
+            public Vector3 Pos;
+            public Quaternion Rot;
+            public Vector3 Vel;
+        }
+
+        private sealed class Tracked
+        {
+            public readonly List<Snap> Snaps = new List<Snap>(24);
+            public float LastRecv = -999f;
+            public bool MadeKinematic;
+            public Rigidbody Body;
+        }
+
+        private readonly Dictionary<uint, Tracked> _spectated = new Dictionary<uint, Tracked>();
+        private readonly Dictionary<uint, MoverTrack.Watch> _watch = new Dictionary<uint, MoverTrack.Watch>();
+        private readonly List<uint> _scratchIds = new List<uint>();
+
+        private float _nextSendAt;
+        private float _nextWatchAt;
+
+        // Owner-side velocity, differentiated from the root rather than read off
+        // a rigidbody: several of these vehicles are moved by their PlayMaker
+        // graph with no rigidbody involved at all.
+        private uint _velFor;
+        private Vector3 _lastPos;
+        private float _lastPosAt;
+        private Vector3 _vel;
+
+        // ------------------------------------------------------- classification
+
+        /// <summary>
+        /// Watch every interactable's root and notice which ones travel. Cheap
+        /// enough to just do — 72 transform reads once a second is nothing —
+        /// and it means no list of vehicle names to go stale.
+        /// </summary>
+        public void Watch(IEnumerable<Machine> machines)
+        {
+            if (Time.time < _nextWatchAt) return;
+            _nextWatchAt = Time.time + 1f;
+
+            int movers = 0;
+            foreach (var m in machines)
+            {
+                if (m == null || m.Root == null) continue;
+
+                MoverTrack.Watch w;
+                _watch.TryGetValue(m.Id, out w);
+                w = MoverTrack.Note(w, m.Root.position);
+                _watch[m.Id] = w;
+
+                if (w.IsMover && !m.IsMover)
+                {
+                    Measure(m);
+                    Plugin.Log("Mover: " + m.Label + " travels, so its position will be shared. "
+                               + "Seats " + m.Capacity + ".");
+                }
+                m.IsMover = w.IsMover;
+                if (w.IsMover) movers++;
+            }
+            Movers = movers;
+        }
+
+        /// <summary>
+        /// How big the thing is, in its own frame. Only used to decide how many
+        /// people fit and roughly where they sit, so renderer bounds are plenty
+        /// — and renderers are the one thing every vehicle in this game
+        /// definitely has, unlike colliders, seat markers or a consistent name.
+        /// </summary>
+        public static void Measure(Machine m)
+        {
+            if (m == null || m.MeasuredExtents || m.Root == null) return;
+            m.MeasuredExtents = true;
+
+            try
+            {
+                var rends = m.Root.GetComponentsInChildren<Renderer>();
+                if (rends == null || rends.Length == 0) return;
+
+                bool any = false;
+                Vector3 min = Vector3.zero, max = Vector3.zero;
+
+                for (int i = 0; i < rends.Length; i++)
+                {
+                    if (rends[i] == null) continue;
+                    var b = rends[i].bounds;
+                    var c = b.center;
+                    var e = b.extents;
+
+                    // World AABB corners, pulled into the vehicle's own frame, so
+                    // a car parked at an angle doesn't measure as a wide one.
+                    for (int k = 0; k < 8; k++)
+                    {
+                        var corner = new Vector3(
+                            c.x + ((k & 1) == 0 ? -e.x : e.x),
+                            c.y + ((k & 2) == 0 ? -e.y : e.y),
+                            c.z + ((k & 4) == 0 ? -e.z : e.z));
+                        var local = m.Root.InverseTransformPoint(corner);
+
+                        if (!any) { min = max = local; any = true; continue; }
+                        min = Vector3.Min(min, local);
+                        max = Vector3.Max(max, local);
+                    }
+                }
+
+                if (!any) return;
+                var size = (max - min) * 0.5f;
+                m.Extents = new Vector3(Mathf.Abs(size.x), Mathf.Abs(size.y), Mathf.Abs(size.z));
+            }
+            catch (Exception ex) { Plugin.Warn("Could not measure " + m.Label + ": " + ex.Message); }
+        }
+
+        public MoverTrack.Watch WatchOf(uint id)
+        {
+            MoverTrack.Watch w;
+            _watch.TryGetValue(id, out w);
+            return w;
+        }
+
+        public void ForgetClassification() { _watch.Clear(); }
+
+        // -------------------------------------------------------------- sending
+
+        public bool ShouldSend(float now)
+        {
+            if (now < _nextSendAt) return false;
+            _nextSendAt = now + 1f / Mathf.Max(1f, SendRate);
+            return true;
+        }
+
+        /// <summary>The pose of something we are driving, for the wire.</summary>
+        public Session.ObjectPose Pack(Machine m)
+        {
+            var pose = new Session.ObjectPose();
+            if (m == null || m.Root == null) return pose;
+
+            var pos = m.Root.position;
+            float now = Time.time;
+
+            if (_velFor != m.Id) { _velFor = m.Id; _lastPos = pos; _lastPosAt = now; _vel = Vector3.zero; }
+            else
+            {
+                float dt = now - _lastPosAt;
+                if (dt > 0.01f)
+                {
+                    _vel = (pos - _lastPos) / dt;
+                    _lastPos = pos;
+                    _lastPosAt = now;
+                }
+            }
+
+            pose.Pos = pos;
+            pose.Rot = m.Root.rotation;
+            pose.Vel = _vel;
+            PosesSent++;
+            return pose;
+        }
+
+        // ------------------------------------------------------------ receiving
+
+        public void Push(Machine m, Session.ObjectPose pose)
+        {
+            if (m == null || m.Root == null) return;
+
+            Tracked t;
+            if (!_spectated.TryGetValue(m.Id, out t))
+            {
+                t = new Tracked();
+                _spectated[m.Id] = t;
+            }
+
+            // Whatever was driving this locally has to stop, or the game's own
+            // graph and the incoming stream fight over the same transform and
+            // the car shakes itself apart.
+            if (!t.MadeKinematic)
+            {
+                t.MadeKinematic = true;
+                t.Body = m.Root.GetComponent<Rigidbody>();
+                if (t.Body != null) t.Body.isKinematic = true;
+            }
+
+            t.LastRecv = Time.time;
+            t.Snaps.Add(new Snap { T = t.LastRecv, Pos = pose.Pos, Rot = pose.Rot, Vel = pose.Vel });
+            while (t.Snaps.Count > 2 && t.Snaps[0].T < t.LastRecv - 1f) t.Snaps.RemoveAt(0);
+            PosesApplied++;
+        }
+
+        /// <summary>
+        /// Drive every spectated root toward where its owner says it is.
+        /// Called every frame, before the rigidbody stream renders, so the
+        /// wheels land relative to a body that is already in the right place.
+        /// </summary>
+        public void Render(Func<uint, Machine> lookup)
+        {
+            if (_spectated.Count == 0) return;
+
+            float now = Time.time;
+            _scratchIds.Clear();
+
+            foreach (var kv in _spectated)
+            {
+                var t = kv.Value;
+
+                // Nobody has told us anything for a long time. Holding a car
+                // still forever because its driver crashed out is worse than
+                // handing it back to the game.
+                if (MoverTrack.IsStale(now - t.LastRecv)) { _scratchIds.Add(kv.Key); continue; }
+
+                var m = lookup(kv.Key);
+                if (m == null || m.Root == null) { _scratchIds.Add(kv.Key); continue; }
+                if (t.Snaps.Count == 0) continue;
+
+                Vector3 pos; Quaternion rot;
+                Resolve(t, now, out pos, out rot);
+                m.Root.position = pos;
+                m.Root.rotation = rot;
+            }
+
+            for (int i = 0; i < _scratchIds.Count; i++) Release(_scratchIds[i]);
+        }
+
+        private static void Resolve(Tracked t, float now, out Vector3 pos, out Quaternion rot)
+        {
+            float renderAt = now - InterpDelay;
+            var last = t.Snaps[t.Snaps.Count - 1];
+
+            if (t.Snaps.Count == 1 || renderAt >= last.T)
+            {
+                // Ahead of the newest sample: guess, briefly. A car at 15 m/s
+                // covers a quarter of a metre between packets, and freezing it
+                // for that quarter-second reads as a stutter on every packet.
+                pos = MoverTrack.Extrapolate(last.Pos, last.Vel, renderAt - last.T, MaxExtrapolate);
+                rot = last.Rot;
+                return;
+            }
+
+            if (renderAt <= t.Snaps[0].T) { pos = t.Snaps[0].Pos; rot = t.Snaps[0].Rot; return; }
+
+            for (int i = 0; i < t.Snaps.Count - 1; i++)
+            {
+                var a = t.Snaps[i];
+                var b = t.Snaps[i + 1];
+                if (renderAt < a.T || renderAt > b.T) continue;
+
+                float span = b.T - a.T;
+                float k = span > 0.0001f ? (renderAt - a.T) / span : 1f;
+                pos = Vector3.Lerp(a.Pos, b.Pos, k);
+                rot = Quaternion.Slerp(a.Rot, b.Rot, k);
+                return;
+            }
+
+            pos = last.Pos; rot = last.Rot;
+        }
+
+        /// <summary>Hands a vehicle back to the game.</summary>
+        public void Release(uint machineId)
+        {
+            Tracked t;
+            if (!_spectated.TryGetValue(machineId, out t)) return;
+            if (t.Body != null) t.Body.isKinematic = false;
+            _spectated.Remove(machineId);
+        }
+
+        public void ReleaseAll()
+        {
+            var ids = new List<uint>(_spectated.Keys);
+            for (int i = 0; i < ids.Count; i++) Release(ids[i]);
+        }
+
+        public int SpectatedMovers { get { return _spectated.Count; } }
+
+        public bool IsSpectating(uint machineId) { return _spectated.ContainsKey(machineId); }
+
+        public float AgeOf(uint machineId)
+        {
+            Tracked t;
+            if (!_spectated.TryGetValue(machineId, out t)) return -1f;
+            return Time.time - t.LastRecv;
+        }
+    }
+}
