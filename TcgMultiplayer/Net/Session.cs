@@ -341,6 +341,17 @@ namespace TcgMultiplayer.Net
             public UnityEngine.Vector3 Pos;
             public UnityEngine.Quaternion Rot;
             public UnityEngine.Vector3 Vel;
+
+            /// <summary>
+            /// How many parents above the machine root this pose describes.
+            ///
+            /// Only the driver can work out which object actually travels — it
+            /// takes watching what moves with you, and a watcher has no motion
+            /// to watch. Without this they apply the pose to the machine root,
+            /// which on a vehicle is a control panel bolted to it, and the cart
+            /// never moves on their screen.
+            /// </summary>
+            public byte BodyUp;
         }
 
         /// <summary>
@@ -356,7 +367,8 @@ namespace TcgMultiplayer.Net
                 w.U32(machineId)
                  .F32(pose.Pos.x).F32(pose.Pos.y).F32(pose.Pos.z)
                  .F32(pose.Rot.x).F32(pose.Rot.y).F32(pose.Rot.z).F32(pose.Rot.w)
-                 .F32(pose.Vel.x).F32(pose.Vel.y).F32(pose.Vel.z);
+                 .F32(pose.Vel.x).F32(pose.Vel.y).F32(pose.Vel.z)
+                 .U8(pose.BodyUp);
                 var bytes = w.ToArray();
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelState, false);
@@ -917,6 +929,7 @@ namespace TcgMultiplayer.Net
                             pose.Pos = new UnityEngine.Vector3(pr.F32(), pr.F32(), pr.F32());
                             pose.Rot = new UnityEngine.Quaternion(pr.F32(), pr.F32(), pr.F32(), pr.F32());
                             pose.Vel = new UnityEngine.Vector3(pr.F32(), pr.F32(), pr.F32());
+                            pose.BodyUp = pr.U8();
                             if (OnObjectState != null) OnObjectState(peer.Id, mid, pose);
                             break;
                         }

@@ -100,7 +100,7 @@ namespace TcgMultiplayer.Game
 
                 MoverTrack.Watch w;
                 _watch.TryGetValue(m.Id, out w);
-                w = MoverTrack.Note(w, m.Root.position);
+                w = MoverTrack.Note(w, m.Moving.position);
                 _watch[m.Id] = w;
 
                 if (w.IsMover && !m.IsMover)
@@ -133,6 +133,10 @@ namespace TcgMultiplayer.Game
             {
                 var target = m.Moving;
                 if (target == null) return;
+                // Mesh renderers only. A ParticleSystemRenderer's bounds cover
+                // wherever its particles have drifted, and the cart's exhaust
+                // smoke measured it as nine metres tall - which then said the
+                // golf cart seats eight.
                 var rends = target.GetComponentsInChildren<Renderer>();
                 if (rends == null || rends.Length == 0) return;
 
@@ -142,6 +146,13 @@ namespace TcgMultiplayer.Game
                 for (int i = 0; i < rends.Length; i++)
                 {
                     if (rends[i] == null) continue;
+
+                    // Mesh renderers only. A ParticleSystemRenderer's bounds
+                    // cover wherever its particles have drifted, and the cart's
+                    // exhaust smoke measured the thing as nine metres tall —
+                    // which then declared that a golf cart seats eight.
+                    if (!(rends[i] is MeshRenderer) && !(rends[i] is SkinnedMeshRenderer)) continue;
+
                     var b = rends[i].bounds;
                     var c = b.center;
                     var e = b.extents;
@@ -193,7 +204,13 @@ namespace TcgMultiplayer.Game
             var pose = new Session.ObjectPose();
             if (m == null || m.Root == null) return pose;
 
-            var pos = m.Root.position;
+            // The body, not the root. On a vehicle the root is the control
+            // panel the card-reader FSM lives on, and sending its pose moved a
+            // 5cm object around the island while the cart stayed parked.
+            var body = m.Moving;
+            if (body == null) return pose;
+
+            var pos = body.position;
             float now = Time.time;
 
             if (_velFor != m.Id) { _velFor = m.Id; _lastPos = pos; _lastPosAt = now; _vel = Vector3.zero; }
@@ -209,8 +226,13 @@ namespace TcgMultiplayer.Game
             }
 
             pose.Pos = pos;
-            pose.Rot = m.Root.rotation;
+            pose.Rot = body.rotation;
             pose.Vel = _vel;
+
+            // Which object this pose is about. The watcher can't work it out —
+            // it takes seeing what moves with you, and they aren't moving.
+            pose.BodyUp = (byte)Mathf.Clamp(m.BodyUp, 0, 8);
+
             PosesSent++;
             return pose;
         }
@@ -220,6 +242,29 @@ namespace TcgMultiplayer.Game
         public void Push(Machine m, Session.ObjectPose pose)
         {
             if (m == null || m.Root == null) return;
+
+            // Adopt the driver's answer about which object actually travels.
+            // Without this the watcher applies the pose to the machine root,
+            // which on a vehicle is the control panel bolted to it — the cart
+            // never moves and a tiny invisible object tours the island.
+            if (m.Body == null && pose.BodyUp > 0)
+            {
+                var up = m.Root;
+                for (int i = 0; i < pose.BodyUp && up != null && up.parent != null; i++) up = up.parent;
+
+                if (up != null && up != m.Root)
+                {
+                    m.Body = up;
+                    m.BodyUp = pose.BodyUp;
+                    m.MeasuredExtents = false;
+                    Measure(m);
+                    Plugin.Log("Mover: " + m.Label + " really moves as " + NetId.Path(up)
+                               + " (its driver said so). extents " + m.Extents
+                               + ", seats " + m.Capacity + ", rideable " + m.Rideable + ".");
+                }
+            }
+
+            if (m.Moving == null) return;
 
             Tracked t;
             if (!_spectated.TryGetValue(m.Id, out t))

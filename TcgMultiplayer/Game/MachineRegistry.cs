@@ -70,6 +70,18 @@ namespace TcgMultiplayer.Game
         /// </summary>
         public Transform Body;
 
+        /// <summary>
+        /// How many parents above Root the body sits.
+        ///
+        /// Sent on the wire, because only the driver can work the body out —
+        /// they are the one who can see what moves with them. A watcher has no
+        /// motion to observe, so without this they resolve the body to Root and
+        /// dutifully move the cart's 5cm control panel instead of the cart.
+        /// Everyone has the same hierarchy, so "go up N parents" lands on the
+        /// same object for one byte.
+        /// </summary>
+        public int BodyUp;
+
         /// <summary>Root, unless we've found the larger thing it is bolted to.</summary>
         public Transform Moving { get { return Body != null ? Body : Root; } }
 

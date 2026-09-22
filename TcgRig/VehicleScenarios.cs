@@ -492,6 +492,7 @@ namespace TcgRig
                     Pos = new Vector3(1234.5f, -67.25f, 890.125f),
                     Rot = new Quaternion(0.2f, -0.5f, 0.1f, 0.8336666f),
                     Vel = new Vector3(0f, -9.81f, 14.5f),
+                    BodyUp = 2,
                 };
                 a.S.SendObjectState(4242u, sent);
                 rig.Pump(0.5);
@@ -507,6 +508,7 @@ namespace TcgRig
                 Assert.Near(got.Rot.y, sent.Rot.y, 0.0001f, "rotation y");
                 Assert.Near(got.Rot.z, sent.Rot.z, 0.0001f, "rotation z");
                 Assert.Near(got.Rot.w, sent.Rot.w, 0.0001f, "rotation w");
+                Assert.Eq((int)got.BodyUp, 2, "and which object the pose is actually about");
 
                 // The thing the old rigidbody stream could not do: 1.2 km from
                 // the origin, where a 16-bit millimetre offset would have

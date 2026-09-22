@@ -722,6 +722,19 @@ namespace TcgMultiplayer.Game
 
         private readonly Dictionary<int, Vector3> _lastAncestorPos = new Dictionary<int, Vector3>();
 
+        /// <summary>Remember where the chain is now, so the next sample has something to compare with.</summary>
+        private void SnapshotAncestors(Machine m)
+        {
+            if (m == null || m.Root == null) return;
+            var t = m.Root.parent;
+            int guard = 0;
+            while (t != null && guard++ < 8)
+            {
+                _lastAncestorPos[t.GetInstanceID()] = t.position;
+                t = t.parent;
+            }
+        }
+
         /// <summary>
         /// Find the thing that actually travels.
         ///
@@ -740,25 +753,46 @@ namespace TcgMultiplayer.Game
         {
             if (m == null || m.Root == null) return;
 
+            // A sample where nothing moved carries no information. The first
+            // version concluded from it anyway: MovesWith is false when there
+            // is no motion, so the climb broke immediately and the body fell
+            // back to Root. Every time the cart paused, the answer collapsed
+            // from GOLFCART_Vehicle to its 5cm control panel again.
+            if (playerDelta.magnitude < RideDetect.MinMotion)
+            {
+                SnapshotAncestors(m);
+                return;
+            }
+
             var best = m.Root;
             var t = m.Root.parent;
             int guard = 0;
+            int up = 0, bestUp = 0;
 
             while (t != null && guard++ < 8)
             {
+                up++;
                 Vector3 was;
                 if (_lastAncestorPos.TryGetValue(t.GetInstanceID(), out was))
                 {
                     if (!RideDetect.MovesWith(playerDelta, t.position - was)) break;
                     best = t;
+                    bestUp = up;
                 }
                 _lastAncestorPos[t.GetInstanceID()] = t.position;
                 t = t.parent;
             }
 
-            if (m.Body == best) return;
+            // Only ever climb. Going back down is always wrong — it means we
+            // learned nothing this sample, not that the vehicle shrank.
+            if (m.Body != null && bestUp <= m.BodyUp)
+            {
+                SnapshotAncestors(m);
+                return;
+            }
 
             m.Body = best;
+            m.BodyUp = bestUp;
 
             // The size is the vehicle's now, not the control panel's, so seats
             // and whether anyone can ride it both have to be worked out again.
