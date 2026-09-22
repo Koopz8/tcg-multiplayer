@@ -147,8 +147,16 @@ namespace TcgMultiplayer.Game
                 if (present.Contains("Turn")) b.TurnParam = "Turn";
                 if (present.Contains("Run")) b.RunParam = "Run";
                 b.Known = true;
-                return b;
             }
+
+            // The rig already knows how to sit and how to drive. Without these
+            // a driver is rendered standing bolt upright on the cart deck with
+            // an arm out, because the only thing we ever told the animator was
+            // how fast they were walking — which, sitting in a seat, is zero.
+            if (present.Contains("IsDriving")) b.DrivingParam = "IsDriving";
+            if (present.Contains("IsSitting")) b.SittingParam = "IsSitting";
+
+            if (b.Known) return b;
 
             // Unknown rig: guess, and say so.
             try
@@ -184,6 +192,10 @@ namespace TcgMultiplayer.Game
         public string TurnParam;      // float, deg/s
         public string RunParam;       // bool
         public string GroundedParam;  // bool
+
+        /// <summary>The rig's own driving and sitting poses. It already has both.</summary>
+        public string DrivingParam;   // bool
+        public string SittingParam;   // bool
 
         public bool Any
         {

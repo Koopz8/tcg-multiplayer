@@ -101,6 +101,14 @@ namespace TcgMultiplayer.Game
             get { return IsMover && MeasuredExtents && Seating.FitsAPerson(Extents); }
         }
 
+        /// <summary>
+        /// Where the driver actually sits, in this thing's own space, as
+        /// reported by whoever is driving. Passengers are placed relative to it
+        /// rather than to a guess from the bounding box.
+        /// </summary>
+        public Vector3 DriverLocal;
+        public bool HasDriverLocal;
+
         /// <summary>Seat the local player is in, or -1.</summary>
         public int MySeat = -1;
     }

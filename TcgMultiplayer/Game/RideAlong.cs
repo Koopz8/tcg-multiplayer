@@ -60,6 +60,12 @@ namespace TcgMultiplayer.Game
         private Rigidbody _body;
         private bool _wasKinematic;
 
+        /// <summary>
+        /// Gap between the PLAYER root and the body mesh, taken once when you
+        /// board. Never re-measured while seated — see Hold for why.
+        /// </summary>
+        private Vector3 _meshToRoot;
+
         public bool Active { get { return Riding != 0; } }
 
         public Attachment Current
@@ -91,12 +97,22 @@ namespace TcgMultiplayer.Game
             // Stop our own physics fighting the pin. Without this the character
             // controller keeps trying to fall, wins for one frame in every few,
             // and the passenger vibrates through the floor of the car.
-            _body = rig.Root.GetComponent<Rigidbody>();
-            if (_body != null)
+            // Only capture the original kinematic flag if we aren't already
+            // holding it. Re-capturing on a second Board — a seat change, or a
+            // re-sent grant — reads back the TRUE we set ourselves last time,
+            // and then getting out "restores" kinematic and the player can
+            // never move again. A permanent freeze from a routine event.
+            if (_body == null)
             {
-                _wasKinematic = _body.isKinematic;
-                _body.isKinematic = true;
+                _body = rig.Root.GetComponent<Rigidbody>();
+                if (_body != null) _wasKinematic = _body.isKinematic;
             }
+            if (_body != null) _body.isKinematic = true;
+
+            // Take the rig offset now, while the player is still standing
+            // normally and it means something.
+            _meshToRoot = rig.Mesh != null ? rig.Root.position - rig.Mesh.position : Vector3.zero;
+            if (_meshToRoot.magnitude > 3f) _meshToRoot = Vector3.zero;   // nonsense, don't trust it
 
             Status = "riding in " + m.Label + ", seat " + (seat + 1) + " of " + m.Capacity;
             Plugin.Log("Ride: " + Status);
@@ -138,14 +154,22 @@ namespace TcgMultiplayer.Game
 
             try
             {
-                var target = m.Moving.TransformPoint(Seating.Offset(Seat, m.Extents));
+                var target = m.Moving.TransformPoint(
+                    m.HasDriverLocal
+                        ? Seating.OffsetFrom(m.DriverLocal, Seat, m.Extents)
+                        : Seating.Offset(Seat, m.Extents));
 
                 // The seat offset positions the BODY, but what we can actually
                 // move is the PLAYER root, and the mesh hangs off it at an
                 // offset. Carry that offset across or everyone rides half a
                 // metre underground.
-                var meshToRoot = rig.Root.position - rig.Mesh.position;
-                rig.Root.position = target + meshToRoot;
+                //
+                // Measured ONCE, at boarding. Re-measuring every frame is a
+                // feedback loop: the animator moves the mesh within the root,
+                // so the gap grows, so the root is pushed further, so the gap
+                // grows again. It creeps for a minute or two and then the
+                // passenger is somewhere they very much should not be.
+                rig.Root.position = target + _meshToRoot;
                 return true;
             }
             catch (Exception ex)

@@ -26,6 +26,8 @@ namespace TcgMultiplayer.Game
             public byte Flags;
             /// <summary>Vehicle they were riding. When set, Pos/Yaw are in its frame.</summary>
             public uint Attached;
+            /// <summary>Seat 0 is the driver, and drives rather than merely sits.</summary>
+            public byte Seat;
         }
 
         public string Label;
@@ -76,7 +78,7 @@ namespace TcgMultiplayer.Game
             {
                 T = _lastRecv, Pos = st.Pos, Yaw = st.Yaw, Pitch = st.Pitch,
                 VelX = st.VelX, VelZ = st.VelZ, Turn = st.Turn, Flags = st.Flags,
-                Attached = st.Attached
+                Attached = st.Attached, Seat = st.Seat
             });
 
             // Keep a second of history; anything older can never be rendered.
@@ -178,6 +180,16 @@ namespace TcgMultiplayer.Game
                 if (_bind.TurnParam != null) _animator.SetFloat(_bind.TurnParam, turn);
                 if (_bind.RunParam != null) _animator.SetBool(_bind.RunParam, running);
                 if (_bind.GroundedParam != null) _animator.SetBool(_bind.GroundedParam, grounded);
+
+                // The rig already has poses for being in a vehicle. A driver
+                // rendered standing bolt upright on the cart deck with an arm
+                // out was us never telling it — the only thing it had ever been
+                // told was walking speed, which in a seat is zero.
+                bool aboard = b.Attached != 0;
+                if (_bind.DrivingParam != null)
+                    _animator.SetBool(_bind.DrivingParam, aboard && b.Seat == 0);
+                if (_bind.SittingParam != null)
+                    _animator.SetBool(_bind.SittingParam, aboard);
             }
             catch { /* a wrong-typed parameter shouldn't kill the frame */ }
         }

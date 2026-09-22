@@ -237,6 +237,33 @@ namespace TcgMultiplayer.Game
         /// roughly right and never wrong beats being exactly right until the
         /// next update.
         /// </summary>
+        /// <summary>
+        /// Where a passenger sits, given where the DRIVER actually is.
+        ///
+        /// Much better than guessing from bounds, and it costs nothing: the
+        /// driver's position is not a guess at all — the game seats them itself
+        /// and we read it back. Mirror it across the vehicle's centreline for
+        /// the seat beside them, and step backwards for the rows behind. A
+        /// vehicle's seats are laid out either side of its driver, whatever
+        /// shape it is.
+        /// </summary>
+        public static Vector3 OffsetFrom(Vector3 driverLocal, int seat, Vector3 extents)
+        {
+            if (seat <= DriverSeat) return driverLocal;
+
+            int row = seat / 2;
+            int side = seat % 2;
+
+            // Beside the driver is the driver's position mirrored on X. Rows
+            // behind step back by a share of the vehicle's length.
+            float rowGap = Mathf.Clamp(extents.z * 0.5f, 0.35f, 1.4f);
+
+            return new Vector3(
+                side == 0 ? driverLocal.x : -driverLocal.x,
+                driverLocal.y,
+                driverLocal.z - row * rowGap);
+        }
+
         public static Vector3 Offset(int seat, Vector3 extents)
         {
             if (seat < 0) seat = 0;

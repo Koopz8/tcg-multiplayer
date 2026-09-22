@@ -233,6 +233,7 @@ namespace TcgMultiplayer
             // where that vehicle is — while still working on its own if the
             // machine side never comes up.
             _avatars.LocalAttachment = () => _machines.CurrentAttachment;
+            _avatars.OnRemoteSeat = (id, seat, local) => _machines.NoteRemoteSeat(id, seat, local);
             _avatars.AttachmentRoot = id =>
             {
                 Machine m;

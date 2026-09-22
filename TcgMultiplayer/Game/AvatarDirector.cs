@@ -51,6 +51,9 @@ namespace TcgMultiplayer.Game
         public Func<Attachment> LocalAttachment;
         public Func<uint, Transform> AttachmentRoot;
 
+        /// <summary>Set by Plugin: where a remote player says their seat is.</summary>
+        public Action<uint, byte, Vector3> OnRemoteSeat;
+
         public AvatarDirector(Session session)
         {
             _session = session;
@@ -177,6 +180,12 @@ namespace TcgMultiplayer.Game
             }
             av.Label = label;
             av.Push(st);
+
+            // Every snapshot that says "I am in seat N of vehicle X, here" is
+            // also the answer to where that seat IS. Worth much more than a
+            // guess from the bounding box, so pass it on.
+            if (st.Attached != 0 && OnRemoteSeat != null)
+                OnRemoteSeat(st.Attached, st.Seat, st.Pos);
         }
 
         private void Despawn(ulong key)

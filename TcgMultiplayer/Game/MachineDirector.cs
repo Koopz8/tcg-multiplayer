@@ -836,7 +836,7 @@ namespace TcgMultiplayer.Game
                     Machine rm;
                     if (_registry.TryGet(riding.Machine, out rm))
                     {
-                        riding.LocalPos = Seating.Offset(riding.Seat, rm.Extents);
+                        riding.LocalPos = SeatOffset(rm, riding.Seat);
                         riding.LocalYaw = 0f;
                     }
                     return riding;
@@ -854,14 +854,61 @@ namespace TcgMultiplayer.Game
                 if (!_registry.TryGet(id, out mine)) return new Attachment();
                 if (!mine.IsMover || !mine.OwnedByMe) return new Attachment();
 
-                return new Attachment
+                var a = new Attachment
                 {
                     Machine = mine.Id,
                     Seat = (byte)Seating.DriverSeat,
-                    LocalPos = Seating.Offset(Seating.DriverSeat, mine.Extents),
+                    LocalPos = SeatOffset(mine, Seating.DriverSeat),
                     LocalYaw = 0f,
                 };
+
+                // Prefer where the game has actually put the driver over where
+                // we guessed a seat might be. It moves the player into the seat
+                // itself, and it knows exactly where that is — the guessed
+                // offset was only ever needed because the rig was thought to be
+                // parked, and it isn't. Expressed in the vehicle's frame, so it
+                // still rides along perfectly.
+                var rig = RigSource != null ? RigSource() : null;
+                if (rig != null && rig.Valid && rig.Mesh != null && mine.Moving != null)
+                {
+                    var local = mine.Moving.InverseTransformPoint(rig.Mesh.position);
+
+                    // Sanity: if the rig has wandered off — parked where they
+                    // boarded, or mid-teleport — fall back to the guess rather
+                    // than seating someone ten metres behind the cart.
+                    float reach = mine.Extents.magnitude + 2f;
+                    if (local.magnitude <= reach)
+                    {
+                        a.LocalPos = local;
+                        a.LocalYaw = Mathf.DeltaAngle(mine.Moving.eulerAngles.y, rig.Mesh.eulerAngles.y);
+                    }
+                }
+
+                return a;
             }
+        }
+
+        /// <summary>
+        /// A remote player has told us where their seat is, in the vehicle's own
+        /// space. The driver's is the useful one: every passenger seat is placed
+        /// relative to it, which beats guessing from a bounding box because the
+        /// game seats the driver itself and we are simply reading it back.
+        /// </summary>
+        public void NoteRemoteSeat(uint machineId, byte seat, Vector3 local)
+        {
+            Machine m;
+            if (!_registry.TryGet(machineId, out m)) return;
+            if (seat != Seating.DriverSeat) return;
+            m.DriverLocal = local;
+            m.HasDriverLocal = true;
+        }
+
+        /// <summary>Where a seat is, preferring the driver's real position over a guess.</summary>
+        private static Vector3 SeatOffset(Machine m, int seat)
+        {
+            return m.HasDriverLocal
+                ? Seating.OffsetFrom(m.DriverLocal, seat, m.Extents)
+                : Seating.Offset(seat, m.Extents);
         }
 
         /// <summary>Can the local player get into this thing right now, and why not?</summary>
