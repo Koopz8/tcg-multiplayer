@@ -3,261 +3,129 @@ CHANGELOG
 
 0.10.1
 ------
-Fixed
-  * The game could come back cropped and at the wrong resolution. This was the
-    mod's fault, and it was two separate mistakes in the monitor mover.
-
-    Moving the window forced the game to the target monitor's native resolution,
-    overriding whatever you'd picked in the game's own settings. Unity saves the
-    resolution, so the wrong one came back on every launch afterwards - long
-    after the move, with nothing in the log to blame.
-
-    It then put that full-size window 40 pixels in from the corner, so 40 pixels
-    of it hung off the right and bottom edges. That's the cropping.
-
-    Moving is now just a move: your resolution is left alone unless it genuinely
-    won't fit on the monitor you're moving to, and the window always lands fully
-    on screen. Fullscreen still matches the monitor, because there that is the
-    right thing to do.
-
-  * Added "Match this monitor's resolution" to the panel, under Monitor, which
-    also now shows what you're actually running at. Fixing the cause doesn't
-    unfix a setting that was already overwritten, and digging it out of the
-    registry isn't a reasonable thing to ask.
-
-  * Ride-along was offering seats in things you obviously can't sit in - a bus's
-    card reader (it moves because the bus does) and the player's own controllers
-    (they move because you do). Moving and rideable are now two different
-    questions, answered by size.
+* Fixed the monitor mover messing up your resolution. It was forcing the
+  target monitor's native res on every move (and Unity saves that, so it
+  stuck), then placing the window 40px off the corner so the edges got cut
+  off. Moving is just a move now.
+* New "Match this monitor's resolution" button under Monitor in the panel,
+  for anyone who already got bitten by the above. Panel also shows what res
+  you're actually running at.
+* Ride along no longer offers you a seat in a bus's card reader.
 
 0.10.0
 ------
-Added
-  * Vehicles move. Before this, a friend driving the golf cart or the Lambo was
-    a body sliding along the road with the vehicle still parked where they
-    found it - the mod only ever sent what was going on INSIDE a machine, and
-    for a car that is the wheels, not the car. Whoever is driving now sends the
-    vehicle's actual position, so you can watch each other drive around.
-
-    Nothing is hardcoded about which things are vehicles. The mod watches what
-    moves and works it out, so anything that travels gets this - including
-    whatever a future game update adds.
-
-  * Ride along. Walk up to something a friend is driving and press F7 to get
-    in. Press it again to get out, and F11 still gets you out of everything.
-    How many fit depends on how big it is: two in the cart, three or four in a
-    car, a lot in the bus. The driver drives; passengers are along for the ride.
-
-    You are put back on your feet automatically if the driver gets out, if the
-    session ends, or if anything at all goes wrong - being stuck inside a
-    vehicle is the one failure this must never have.
-
-Fixed
-  * A rigidbody sitting on a machine's own root was being sent relative to
-    itself, which meant it was pinned in place. Harmless on a cabinet, and the
-    reason a vehicle would snap back a frame after moving.
+* Vehicles actually move for other players now. Before this a friend driving
+  the golf cart looked like a body sliding down the road with the cart still
+  parked. Works for anything that drives, including whatever gets added later.
+* Ride along - walk up to something a friend is driving and press F7 to get
+  in, F7 again to get out. Seats depend on size (2 in the cart, more in the
+  bus). You get put back on your feet automatically if the driver leaves,
+  the session ends, or anything goes wrong. F11 still gets you out of
+  everything.
+* Fixed a vehicle snapping back a frame after moving.
 
 0.9.8
 -----
-Changed
-  * The Nexus download is now a manual install - the mod file and nothing else.
-    You install MelonLoader yourself from melonloader.net and drag one folder
-    into the game. Updating is replacing one file; uninstalling is deleting it.
-
-    The one-click installer still exists and still works, it just isn't on the
-    public page. A download that runs a script on your machine is a lot to ask
-    of someone who has no reason to trust you yet.
-
-Fixed
-  * The mouse could wander off the game window while the panel was open, which
-    on a second monitor meant clicking the panel dropped you out of the game.
-    It's now held inside the window - still visible, still free to move, just
-    bounded by the game.
-
-    If you'd rather drag the pointer out to another screen, turn off "Keep the
-    cursor in the window" in MelonLoader's settings.
-
-  * Closing the panel hands the pointer straight back to the game rather than
-    leaving it confined.
+* Nexus download is now a manual install - just the mod file. Install
+  MelonLoader yourself, drop one folder in. Updating = replace one file.
+  The one-click installer still exists for testers on discord, it's just not
+  on the public page.
+* Mouse stays inside the game window while the panel is open, so clicking
+  the panel on a second monitor doesn't drop you out of the game. Turn off
+  "Keep the cursor in the window" in the config if you'd rather not.
+* Closing the panel gives the pointer straight back to the game.
 
 0.9.7
 -----
-Fixed
-  * The mouse pointer flickered while the panel was open. Something in the
-    game re-locks the cursor about forty times a second, and the mod was
-    unlocking it again just as often - you were watching the two of them
-    argue. It now stops the game taking the pointer in the first place while
-    the panel is open, so there's nothing to flicker.
-
-    The panel's Health section shows whether this is working.
+* Fixed the mouse pointer flickering with the panel open. The game re-locks
+  the cursor ~40 times a second and the mod was unlocking it just as often.
+  Now it stops the game grabbing it in the first place.
 
 0.9.6
 -----
-Fixed
-  * The game appeared to freeze when you opened the panel. It wasn't frozen -
-    0.9.5 finally got the input suppression working, and it was switching off
-    ALL of the game's controls for as long as the panel was open. That stops
-    you moving and stops the game's own menus responding, which looks exactly
-    like a hang.
-
-    It now only holds your keypresses back while the caret is actually in the
-    chat or lobby-ID box, which is all it was ever for. Open the panel and the
-    game still plays normally; click into chat and typing stays in chat. The
-    panel tells you which state you're in.
-
-  * F11 now also releases the input lock, so there's always a way back if
-    anything ever gets stuck.
+* Game no longer looks frozen when you open the panel. 0.9.5 was disabling
+  ALL game input while the panel was open, which also killed the game's own
+  menus. Now it only holds your keys while you're actually typing in chat or
+  the lobby ID box.
+* F11 also releases the input lock.
 
 0.9.5
 -----
-Fixed
-  * Typing in chat could still walk your character. The previous fix wasn't
-    enough - two things were wrong underneath it.
-
-    The mod was looking for the game's input system in a way that only works
-    if one particular part of it is shaped the way the documentation says. It
-    isn't, on this build. It now looks several ways, including by type, so an
-    obfuscated or renamed internal doesn't defeat it.
-
-    And it only ever tried once each time you opened or closed the panel. The
-    game's input system isn't ready that early, so a single try usually missed.
-    It now keeps trying quietly in the background until it works.
+* Typing in chat could still walk your character. Two things underneath:
+  the mod was looking for the game's input system in a way that doesn't
+  work on this build (it's obfuscated), and it only tried once per panel
+  open, before the input system was ready. Fixed both.
 
 0.9.4
 -----
-Fixed
-  * Opening the panel didn't always stop your keypresses reaching the game, so
-    typing in chat could also walk your character. The check for the game's
-    input system ran once, and if it happened before the game had finished
-    starting up it gave up permanently. It now keeps trying, and says so in the
-    panel while it can't.
-
-  * The self-check reported "economy globals aren't readable" when it simply
-    hadn't looked yet. It now checks properly, and if your save really isn't
-    loaded it tells you to load it and press F10 again.
+* Input lock could give up permanently if the panel was opened before the
+  game finished starting. It retries now and says so in the panel.
+* Self-check was reporting "economy globals aren't readable" when it just
+  hadn't looked yet.
 
 0.9.3 - public beta
 -------------------
-Added
-  * A session report, written automatically every time a session ends, into a
-    TcgMultiplayer_Reports folder next to the game. There's also a Copy button
-    in the panel. Last 20 are kept.
-
-    It records how long you played, whether you hosted or joined, how it ended,
-    everyone's ping and mod version, machines and events, physics mismatches,
-    payouts the wallet guard blocked, and whether your progression was put back
-    properly. Nothing is sent anywhere - it's a file on your disk that you
-    choose to send.
-
-    If you're testing: please send this along with the MelonLoader log, from
-    both sides of the session.
-
-  * The installer now notices if BepInEx is installed in the same game folder
-    and warns you. The other Coin Game mods use it, and two mod loaders in one
-    folder usually means the game starts with no mods at all and no hint why.
+* Session reports. Every time a session ends a text file goes into
+  TcgMultiplayer_Reports next to the game (last 20 kept, Copy button in the
+  panel). Has pings, versions, machine events, blocked payouts, whether your
+  progression got restored. Nothing is uploaded, it's a file you choose to
+  send. If you're testing, please send it with the MelonLoader log from both
+  sides.
+* Installer warns if BepInEx is in the same folder. Two loaders = the game
+  starts with no mods and no hint why.
 
 0.9.2 - closed beta
 -------------------
-Added
-  * A self-check, on F10 or the button in the panel. It verifies the wire
-    format for every message type, that awkward names with accents and emoji
-    survive, that malformed packets are rejected instead of crashing, that
-    machine ids are stable and unique, that the wallet guard is armed, that
-    the save backup really writes files - and that a full visit to someone
-    else's island gives your own progression back afterwards, tested against
-    your real save in a couple of seconds.
-
-    There's a Copy result button so you can paste the outcome into a report.
-    It says at the bottom what it does NOT test, which is Steam actually
-    delivering packets between two machines. Only a real session tests that.
-
-Changed
-  * A peer sending malformed packets can no longer flood the log - after ten
-    it says so once and goes quiet. They're almost always just on a different
-    version.
+* Self-check on F10. Checks the wire format, weird names with emoji, bad
+  packets, machine ids, the wallet guard, the save backup, and that a full
+  visit to someone's island gives your own stuff back - against your real
+  save, takes a couple seconds. Copy result button. Says at the bottom what
+  it does NOT test (Steam actually delivering packets between two PCs).
+* A peer sending garbage packets can't flood the log anymore.
 
 0.9.1
 -----
-  * Cut what the mod costs per frame. It was rebuilding its machine list
-    whenever the number of active state machines moved a little, and coin
-    pushers move it constantly - so on a busy machine it was walking about
-    4,500 of them twice, every two seconds. That's a hitch you can feel.
-  * Added a performance panel: frame rate, worst frame in the last second,
-    and exactly how many milliseconds the mod itself is using. If the game
-    stutters and that number is near zero, it isn't this.
-  * The save backup no longer tries to copy the game's own log file, which
-    is always open and always failed.
+* Cut the mod's frame cost. It was rebuilding its machine list constantly
+  on busy machines (coin pushers), walking ~4500 state machines every couple
+  seconds. You could feel it.
+* Performance panel: fps, worst frame, and how many ms the mod itself is
+  using. If the game stutters and that number is ~0, it's not this.
+* Save backup no longer tries to copy the game's log file (always open,
+  always failed).
 
 0.9.0
 -----
-First build prepared for public release.
+First build meant for the public.
 
-Added
-  * Your save is copied aside the first time you host or join a session.
-    Five copies are kept, in a TcgMultiplayer_SaveBackups folder next to the
-    save itself. There's also a button in the panel to do it on demand.
-
-  * Visiting someone else's island no longer follows you home. Your own
-    unlocks are held aside while you're a guest and put back when you leave,
-    and anything you unlocked yourself while visiting stays yours. This was
-    the most dangerous thing about the mod and it is now the safest.
-
-  * The mod refuses to join a host running a different version of it, and
-    says which version each of you has. Two different versions could read
-    each other's packets wrongly, and the symptoms would have looked like
-    anything except the real cause.
-
-  * A different build of the game is now flagged in the panel rather than
-    only in a log file nobody opens.
-
-  * If the host leaves, the session ends cleanly for everyone instead of
-    Steam quietly handing the lobby to a guest who does not have the world.
-
-  * Every part of the mod that runs each frame is isolated. A bug in one of
-    them switches that feature off and says so in the panel, instead of
-    throwing sixty times a second and taking your framerate with it. There's
-    a button to try them again without restarting.
-
-Changed
-  * The panel no longer opens on startup. Press F9 when you want it.
-  * The solo testing tools are folded away behind a toggle.
-  * On quit, the session is closed before anything else, so a guest's own
-    progression is restored before the game writes its save.
-
+* Your save gets copied aside the first time you host or join. Five kept,
+  in TcgMultiplayer_SaveBackups next to the save. Button in the panel too.
+* Visiting someone's island doesn't follow you home anymore. Your own
+  unlocks are held aside while you're a guest and put back when you leave.
+  This was the most dangerous thing in the mod, it's now the most tested.
+* Refuses to join a host on a different mod version, and says which you
+  each have.
+* Different game build gets flagged in the panel, not just the log.
+* Host leaving ends the session cleanly for everyone.
+* Every per-frame part of the mod is isolated - a bug in one switches that
+  feature off and tells you, instead of throwing 60 times a second.
+* Panel no longer opens on startup. F9.
+* Solo testing tools folded behind a toggle.
+* On quit the session closes before the game saves, so a guest's own
+  progression is restored first.
 
 0.8.0
 -----
-  * Steam achievements, stats and leaderboards are blocked for the duration
-    of a session. Spectating replays a friend's round on your machine, so
-    without this their score could post under your name. Single player is
-    completely unaffected.
-  * A health panel that names anything the mod expected to find and didn't,
-    rather than failing silently.
-  * The game build is fingerprinted and compared between players.
+* Steam achievements/stats/leaderboards blocked during a session. Spectating
+  replays a friend's round on your machine, so their score could've posted
+  under your name. Single player unaffected.
+* Health panel that lists anything the mod expected to find and didn't.
+* Game build fingerprinted and compared between players.
 
-0.7.0
-  * Recorded rounds replay with physics, through the real spectator path.
-
-0.6.1
-  * Fixed being unable to leave a machine after playing a round. Machines the
-    player is inside are never frozen, only the 14 cabinets that actually have
-    an unfreeze state are ever frozen at all, and F11 releases everything.
-
-0.6.0
-  * Rehearsal: record a round and replay it as if a friend were playing it.
-
-0.5.0
-  * Shared island progression - unlocks, doors and vehicles.
-
-0.4.0
-  * Per-player wallets, with 254 economy globals held steady while you watch
-    someone else play.
-
-0.3.0
-  * Machine ownership, occupancy and live spectating.
-
-0.2.0
-  * Player bodies, with movement and animation.
-
-0.1.0
-  * Lobby, handshake, chat and round-trip timing over Steam networking.
+0.7.0  - recorded rounds replay with physics
+0.6.1  - fixed being stuck in a machine after a round. F11 releases everything.
+0.6.0  - rehearsal: record a round and replay it as if a friend played it
+0.5.0  - shared island progression (unlocks, doors, vehicles)
+0.4.0  - per-player wallets
+0.3.0  - machine ownership and spectating
+0.2.0  - player bodies with movement/animation
+0.1.0  - lobby, handshake, chat, ping over Steam networking

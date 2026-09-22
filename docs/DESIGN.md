@@ -1,0 +1,520 @@
+# tcg-multiplayer - design notes
+
+
+Long-form notes on how each piece works and why. Moved out of the README because nobody installing the mod needs to read 500 lines first. Some of this is out of date, the code wins where they disagree.
+Multiplayer for **The Coin Game** (Steam app 598980). Two to four players share an
+island over Steam: you walk around together, take turns on the machines, watch each
+other play, and everyone keeps their own money.
+
+Public beta, MIT licensed, and [on Nexus](https://www.nexusmods.com/thecoingame/mods/9).
+
+| Project | Purpose |
+|-----|---------|
+| **TcgMultiplayer** | The mod. Lobby and transport, player bodies, machine ownership and spectating, per-player wallets, a shared island, machine physics, and the safety work around all of it. |
+| **TcgRig** | A console harness that runs two real `Session` objects against a fake Steam with a clock it controls. 39 scenarios, ~40 ms. See `TcgRig/README.md`. |
+| **TcgFsmDump** | M0 — dumps every PlayMaker FSM graph to JSON and traces which events fire while you play. A research tool; keep it around. |
+
+**Status:** everything that can be verified on one machine is, and passes. What has
+*not* been exercised is two real computers talking to each other over Steam. That is
+the open question, and no amount of local testing closes it.
+
+Target: Unity **2022.3.62f3**, Mono x64, game build `22761496`.
+Loader: **MelonLoader 0.6.6** (HarmonyX 2.10.2).
+
+---
+
+## Install
+
+Drop the built `.dll`s into `TheCoinGame\Mods\`. Both can run at once.
+
+## TcgMultiplayer (M1)
+
+Press **F9** for the overlay.
+
+- **Host** — creates a friends-only Steam lobby
+- **Invite friend** — opens Steam's invite dialog
+- **Join by lobby ID** — paste a lobby ID if you'd rather not use the overlay
+- Accepting a Steam invite works whether the game is running (`GameLobbyJoinRequested`)
+  or closed (`+connect_lobby` on the command line)
+
+The panel shows each peer's name, handshake state, **round-trip time in ms**, and
+the raw Steam connection state. The chat box is there to prove bytes move both
+ways — type, hit Enter, watch it land on the other machine.
+
+### M2 — remote avatars
+
+Other players get a real body: a clone of `PLAYER/LARRY Mesh` with every FSM, IK
+controller, collider, rigidbody, light and audio source stripped out, driven from
+the network with a nameplate over its head. Snapshots go out at 15 Hz on an
+unreliable channel; remote bodies render ~120 ms in the past and interpolate
+between snapshots, so motion stays smooth between packets.
+
+### Mirror mode — testing avatars with one copy of the game
+
+Steam runs one instance of a game per account, so a second player needs a second
+PC *and* a second copy. **Mirror** removes that blocker for everything except
+Steam's own delivery.
+
+Tick **Mirror me** in the overlay. Your own player state is serialised through the
+real wire format, held for a configurable delay, then fed back through the real
+receive path — spawning a real remote avatar. You get a ghost of Larry walking
+your exact path a second and a half behind you.
+
+If the ghost walks correctly, then cloning, stripping, snapshot encoding,
+interpolation, the animator binding and nameplates are all proven. The only part
+Mirror does not cover is Steam moving the bytes, and M1 already exercises that API.
+
+Slide the delay down to 0.25 s to check interpolation smoothness; push it to 5 s to
+watch a long path replay.
+
+### M3 — machine occupancy and spectating
+
+**Ownership.** The host is authoritative. When your card goes into a machine, the
+mod asks the host to grant it; everyone else gets the game's own `FREEZE MACHINE`
+event on that cabinet, so it visibly refuses their card. Two players grabbing the
+same machine in the same instant cannot both win. If someone disconnects mid-round
+their machines are released rather than left locked.
+
+Occupancy is read off the game's own lifecycle states — `Card Inserted`,
+`Turn On MECH`, `Ready To Play` to claim; `Card Removed`, `Button Exit Machine`,
+`Send Explore Mode Event`, `Off of Ride and Done` to release — so it works however
+the player got there.
+
+**Spectating.** The machine's owner mirrors every non-system FSM event fired inside
+that machine's subtree, and spectators replay them on their own copy of the same
+FSMs. Events rather than states, because a PlayMaker graph fed the same events walks
+the same path, and because the M0 trace showed a whole round is a couple of dozen
+events, not a stream. Sent reliably and ordered — a dropped machine event desyncs
+the cabinet for the rest of the round, unlike a dropped position snapshot.
+
+Known limit: a graph that rolls dice locally (`ActionRandomPrizeSelection`) can
+diverge. That's where per-machine adapters eventually earn their keep. The overlay
+shows sent/applied counts so drift is visible.
+
+One adapter covers all 72 interactables — cabinets, rides, booths, vending
+machines, lotto menus and the four vehicles.
+
+### M4 — per-player wallets
+
+Every player keeps their own money, tickets, prizes and inventory. That needed
+**no synchronisation at all** — each client runs its own PlayMaker globals, so
+separate wallets are the default state. What it needed was a *guard*.
+
+M3's spectating replays the machine owner's FSM events, and the payout is one of
+those events: left alone, everyone watching a Skee Ball win gets paid for it. So
+the economy globals are snapshotted immediately before a mirrored event is applied
+and restored immediately after. That closes every payout path at once rather than
+blacklisting the handful anyone thought to look for.
+
+The list of what's protected came from dumping all **658** PlayMaker globals — the
+economy partitions cleanly by name (`COINS *`, `TICKETS *`, `CHIPS *`,
+`GAMECARDS *`, `PRIZE CREDITS *`, `INVENTORYSPOT_*`, `PLAYCOUNT_*`, the per-machine
+game credits, and player condition like `HEALTH Balance` / `BATTERY POWER`). It's a
+prefix list in `MelonPreferences` under `ProtectedEconomyGlobals`, so a game patch
+that adds a currency doesn't need a rebuild.
+
+Balances are broadcast once a second purely so the overlay can show a scoreboard —
+nothing authoritative rides on them. Coins are stored in cents (`COINS Balance` 250
+is `$2.50`).
+
+### M5 — the shared island
+
+**Decision: full progression together.** Guests can do everything — unlock areas,
+open doors, buy vehicles. So the 658 globals split in two, and the split is the
+whole design:
+
+| | |
+|---|---|
+| **Player-owned** — never crosses the wire, defended from spectating | money, tickets, chips, prizes, inventory, per-machine playcounts, health/energy/battery, passes |
+| **World-owned** — host-arbitrated, replicated to everyone | `SURVIVOR_*` (area unlocks, bunker/underground/phonebooth doors, final scene), `LOOT BOX Unlocked 1-4`, and the vehicles: golf cart, van, lambo, superkart, car 1/2 |
+
+Anyone may change world state; the change routes through the host, who applies it
+and broadcasts the result, exactly like machine ownership. A joiner asks for a full
+snapshot as soon as the handshake completes, so they arrive on the host's island
+rather than their own. Values are typed on the wire so a bool can't arrive as an int
+and silently unlock something.
+
+Detection is a half-second poll rather than a hook: unlocks get set from PlayMaker
+actions scattered right across the game, and half a second of latency on "the arcade
+is now unlocked" is imperceptible.
+
+Both lists are prefix-matched preferences (`ProtectedEconomyGlobals`,
+`SharedWorldGlobals`), so the line between yours and everyone's can be moved without
+a rebuild.
+
+### Machine registry: scanning, not a one-shot
+
+A single scan after a scene load found **14** of the 72 interactables. Most of the
+island starts deactivated — `OUTSIDE Starts OFF`, `CARNIE Starts OFF`, the arcade
+interior — and PlayMaker only registers an FSM once its GameObject has actually
+awoken, so machines appear in `FsmList` as you walk into them. The registry now
+watches the list size and rebuilds when a new district comes online.
+
+## Solo tests — verifying the two-player features with one copy
+
+Ownership, spectating and the wallet guard only fire when *someone else* is
+playing, which with one copy of the game is never. The overlay's **Solo tests**
+panel stands in for that friend.
+
+**Rehearsal** — walk up to a machine, hit *Record a round*, play it, hit *Stop*,
+then *Replay as a friend*. The machine is handed to a fake peer for the duration
+and the recording is replayed through the genuine spectator path at the original
+timings. That exercises, in one go:
+
+- the registry resolved the right FSMs under that machine
+- event replay actually drives the cabinet
+- **the wallet guard holds your balance still while someone else's round plays**
+
+The panel reports `wallet held` or `GUARD LEAKED Nx` after each replay. If your
+coins move during a rehearsal, the guard is broken — and you find that out alone
+in a minute, rather than with a friend three milestones later.
+
+**Fake: friend takes it / leaves** — forces a remote claim on the nearest machine.
+The cabinet should visibly refuse your card, via the game's own `FREEZE MACHINE`.
+
+**F11 releases everything** if a machine ever refuses to let you out.
+
+### Freezing has rules, learned the hard way
+
+The first version of the solo harness trapped the player inside a machine. Three
+causes, all now fixed:
+
+- **`Machine Is Frozen` is a dead end.** It's the game's own state and there is no
+  transition out of it except `UNFREEZE MACHINE`. Freezing a cabinet the player is
+  standing in removes their only exit. Machines now track `LocallyOccupied`
+  separately from network ownership, and a machine you are inside is never frozen —
+  refusing the claim is enough, and you keep control of your own exit.
+- **Only 14 of the 72 controllers even have that state.** The rest silently swallow
+  `FREEZE MACHINE`, so the registry now records `SupportsFreeze` and only freezes
+  the ones that mean it.
+- **Rehearsal could strand a machine.** It borrowed ownership on play and restored
+  it from a caller-supplied reference, which was `null` on the failure path — leaving
+  the cabinet owned by a peer that does not exist and frozen forever. It now keeps
+  its own reference and always gives the machine back, plus there's a sweep each
+  frame that reclaims anything still held by a stale rehearsal peer.
+
+### M6 — machine physics
+
+Event mirroring carries a machine's *logic*, which is all the zero-rigidbody
+cabinets need (Speed Drop, Big Bass, vending, bulk candy). It is not enough for a
+claw or a coin pusher, where the point is where the physical objects ended up —
+and PhysX is not deterministic across machines, so both sides simulating the same
+round diverge within a second.
+
+So the owner simulates and everyone else watches. Rigidbodies under the owned
+machine are gathered depth-first, packed relative to the machine's own root as
+3×int16 position (1 mm) + 4×int16 rotation = **14 bytes a body**, and sent
+unreliable at 20 Hz. Spectators go kinematic and interpolate.
+
+Measured worst case from the M0 dump is 100 bodies (Claw Machine Balls) and 63–66
+coins per pusher — about **18 KB/s for the busiest machine in the game**, and only
+while somebody is actually playing it. Interest management came free: one machine
+is occupied at a time per player, so only that machine streams.
+
+**Addressing is by ordinal, not by path.** Coins are runtime clones that share a
+name, so paths can't tell them apart. That only holds while both sides agree how
+many bodies exist — which is exactly what the event mirror keeps true — so a count
+mismatch is detected, skipped and counted rather than silently putting coin 40's
+position onto coin 39. The overlay shows the mismatch count.
+
+Physics frames go onto the Rehearsal tape too, so a coin pusher round can be
+recorded and replayed solo: the coins move from the recording while local physics
+is switched off, which is the same path a real spectator takes.
+
+### M9 — vehicles, and riding in one
+
+The two replication kinds above both had the same blind spot, and it took
+watching someone drive to see it. Event mirroring sends a machine's logic; for a
+car that is "engine on" and nothing about where it went. The rigidbody stream
+sends everything inside a machine *relative to that machine's own root*,
+quantised to a millimetre over a ±32.7 m box — which describes a car's wheels
+perfectly while saying nothing whatsoever about the car. So a friend driving past
+you was a body gliding along the road with the vehicle still parked in its bay.
+
+`MoverReplicator` is the missing third kind: the root itself, in world space,
+from whoever is driving. 30 bytes at 20 Hz — position and rotation as plain
+floats because the whole point is that it leaves the place it started, plus
+velocity so a spectator can carry it through the gap between packets. It
+*composes* with the other two rather than replacing them: this carries the car,
+the rigidbody stream carries the wheels relative to it, the event mirror carries
+the horn.
+
+One bug fell out of that composition immediately. `PhysicsReplicator.Gather` was
+including the root's own rigidbody, which is always at the origin of its own
+frame — a harmless no-op on a cabinet, and on a vehicle it wrote the car back to
+wherever it had been when the packet was unpacked, one frame after the world
+stream had moved it. Both ends now skip it, so the ordinals still line up.
+
+**Nothing names the vehicles.** `MoverTrack` watches every interactable's root
+and calls it a mover once it has been 2.5 m from where it was first seen. The
+game is PlayMaker graphs in scene assets and devotid can rename any object in any
+patch without it reading as a breaking change, so a list of vehicle names is a
+thing that silently stops being true. Watching is always true, and it picks up
+whatever a future update adds for free. The threshold is generous on purpose: a
+ride settling on its springs is not a road trip.
+
+**Riding along is the mod's, not the game's.** The game's model is one card, one
+machine, one player — so if a passenger enters a vehicle through the game, their
+copy starts being driven locally while the driver's stream is also writing to it,
+and the two tear it in half. Instead a passenger never touches the vehicle's
+graph: they are pinned to a seat every frame with their own rigidbody switched
+off. To the game, nothing has happened — the player just happens to be standing
+somewhere that moves. That is why it works on all four vehicles, the kart and the
+bus without one line of per-vehicle code.
+
+Two details that are load-bearing:
+
+- **A passenger's position is sent in the vehicle's frame, not the world's.**
+  Otherwise two independently-interpolated streams have to agree twenty times a
+  second about where a seat is, and they never quite do — the passenger shivers
+  in the seat and slides out of it on corners. Sent relatively, the offset is a
+  constant and the body is welded to the seat for free. Getting in or out changes
+  what the numbers *mean*, so `RemoteAvatar` cuts rather than blends across that
+  boundary.
+- **No reparenting.** A transform parented under a vehicle survives that vehicle
+  being deactivated, despawned or unloaded in ways that leave the player
+  somewhere unreachable. Re-pinning every frame stops the instant anything goes
+  wrong, which is the failure mode you want. For the same reason riding doesn't
+  touch the Rewired input lock: disabling the input maps would also kill the
+  game's own menus, and a passenger who can't open the pause menu thinks the game
+  has frozen.
+
+Capacity and seat positions are guessed from renderer bounds — two per row, front
+to back. Roughly right and never wrong beats exactly right until the next patch.
+
+Four separate things end a ride (you press F7, the driver gets out, the vehicle
+disappears, the session ends) and every one of them lands in the same
+`RideAlong.Leave`. Being stuck inside a vehicle is the worst thing this feature
+can do to someone, so there is exactly one way out and everything uses it. F11
+also works.
+
+The host arbitrates seating for the same reason it arbitrates ownership: two
+people reaching for the last seat in the same frame must not both get it. That
+rule is `Seating.Decide` — pure, no Unity, no network — and the rig sweeps 10,752
+boarding orders through it checking that nobody is ever in two seats at once.
+
+### Settings
+
+`UserData\MelonPreferences.cfg`, section `[TcgMultiplayer]`:
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `ToggleKey` | `F9` | Any `KeyCode` name. |
+| `MaxPlayers` | `4` | 2–8. The bandwidth model is designed around 4. |
+| `OpenOverlayOnStart` | `false` | The panel stays shut until you press the toggle key. |
+| `SuppressGameInputWhileOpen` | `true` | Disables Rewired input maps so chat typing doesn't also drive the player. |
+| `SnapshotHz` | `15` | How often local position is sent. Plenty for walking speed. |
+| `InterpolationDelaySeconds` | `0.12` | How far in the past remote bodies render. |
+| `MirrorDelaySeconds` | `1.5` | Mirror mode ghost delay. |
+| `AnimatorSpeedScale` | `1.0` | Multiplies what's fed to the walk/run blend. Raise it if remote bodies glide with barely-moving legs; lower it if they sprint on the spot. |
+| `SelfTestKey` | `F10` | Runs the built-in self-check. |
+| `ReleaseEverythingKey` | `F11` | Unstick: releases every machine you're holding, and the input lock. |
+| `RideAlongKey` | `F7` | Get into / out of a vehicle a friend is driving. |
+| `NextMonitorKey` | `F8` | Moves the game window to the next monitor. Works without being able to see the game. |
+| `PreferredMonitorName` | *(empty)* | Set from the panel. Blank this if the game ever opens somewhere you can't see it. |
+| `PreferredMonitorIndex` | `-1` | Fallback for when the monitor name doesn't match. |
+| `ConfineCursorToWindow` | `true` | Keeps the mouse inside the game while the panel is open. |
+| `BackupSaveBeforeSession` | `true` | Copies your save aside the first time you host or join. |
+| `BlockSteamStatsInSession` | `true` | See M7. Turning this off is not recommended. |
+| `GuestKeepsOwnProgression` | `true` | The visit model below. Off means a guest keeps whatever the host's island gave them. |
+
+### Design notes
+
+**Steam is the game's, not ours.** `HLG.Runtime.dll` ships Steamworks.NET's
+`SteamManager`, which already calls `SteamAPI.Init()` and pumps
+`SteamAPI.RunCallbacks()` every frame. The mod must not do either — it would
+double-dispatch every callback in the game. `SteamBridge` just waits on
+`SteamManager.Initialized`, read by reflection so there's no hard reference to
+HLG.Runtime.
+
+**Transport is `SteamNetworkingMessages`**, which hands us NAT traversal, relay
+fallback and authenticated identity for nothing. Channel 0 is reliable control,
+channel 1 is unreliable for ping. Sessions are only accepted from peers who are
+actually in our lobby.
+
+**The cursor has to be taken by force.** The M0 trace caught an FSM re-issuing
+`Cursor LOCKED` roughly 40 times a second, so a one-shot unlock loses. The overlay
+reasserts `CursorLockMode.None` in `OnGUI`, which runs after every `Update`.
+
+**Input suppression borrows the game's own move.** `ControllerDisconnectView` calls
+`SetAllMapsEnabled(false)` on the Rewired player when it needs to steal input;
+`InputLock` does the same by reflection.
+
+**There is a player movement class after all.** The M0 write-up said there wasn't;
+that was wrong. `UnitySampleAssets.Characters.FirstPerson.RigidbodyFirstPersonController`
+sits on `PLAYER` — it lives in `Assembly-CSharp-firstpass`, not `Assembly-CSharp`,
+which is why the first sweep missed it. It exposes `Velocity`, `Grounded`,
+`Jumping` and `Running`, which is exactly the animation state a remote body needs.
+Read by reflection, with a transform-delta fallback for speed.
+
+**Avatars are positioned from the mesh, not the player root.** `LARRY Mesh` sits at
+a local offset inside `PLAYER`; driving the clone from the root's position plants
+it at the wrong height.
+
+**Locomotion is a 2D blend, so velocity crosses the wire in the body's frame.**
+Larry's animator exposes `Walk`, `Turn`, `MoveSpeedX`, `MoveSpeedY`, `Run`,
+`Crouch` plus a pile of action parameters (`Insert Card HIGH/MID/LOW`, `IsDriving`,
+`IsSitting`, `IsBiking`, `RaiseBat Bool`, …). `MoveSpeedX` is **strafe** and
+`MoveSpeedY` is **forward** — a name-matching heuristic picked `MoveSpeedX` first
+and fed forward speed into the strafe axis, which makes the body sidle instead of
+walk. The rig is now bound by an explicit table; the heuristic only survives as a
+fallback for a rig we haven't seen. The snapshot carries `velX`, `velZ` (local
+frame) and a smoothed `turn` rate rather than one scalar speed.
+
+---
+
+## TcgFsmDump (M0)
+
+**F7** dumps the loaded scene, **F8** toggles the live trace. A dump also runs
+automatically ~6 s after each scene load. Output goes to `TheCoinGame\TcgFsmDump\`:
+
+- `fsm_<scene>_<ts>.json` — full graph dump
+- `fsm_<scene>_<ts>.summary.txt` — read this first
+- `trace_<ts>.log` — `time, frame, kind, fsmPath|fsmName, detail`
+
+The workflow that matters: load in, walk to a machine, **F8**, play one round,
+**F8**. The trace is the event shortlist for that machine.
+
+Settings live under `[TcgFsmDump]`; `MutedEvents` is worth filling in as you learn
+which events are just per-frame noise.
+
+### What M0 established
+
+- **NetId = FNV-1a 32 of the hierarchy path.** 0 collisions across 4,533 FSMs.
+  `ES2UniqueID` is on 0 of them and is not usable.
+- **`Coin Machine Canvas CNTLR`** — one FSM type, 72 instances, on every machine,
+  ride, booth, vending unit and vehicle. Its `Card Inserted` / `Card Removed` /
+  `FREEZE MACHINE` states are the game's own occupancy model.
+- **`WorldUI_Prize FSM`** — 102 instances, the single chokepoint for every purchase.
+- Worst rigidbody count is 100 (Claw Machine Balls); coin pushers are 63–66 coins each.
+- 2,356 graphs are named just `FSM`, so adapters must key on **path pattern**, not name.
+
+---
+
+### M7 — release safety
+
+**Steam stats are locked during a session.** The game submits to ~48 leaderboards,
+and M3 makes a friend's round play out on your machine — so without this, watching
+someone win Skee Ball can post their score under your name. That's a cheat vector
+and the fastest way for a mod to get disowned by the developer it depends on.
+
+Everything funnels through Steamworks.NET's `SteamUserStats` in the end — the
+PlayMaker action pack, HLG's achievement service and LapinerTools' leaderboard
+uploader all call the same handful of methods — so six patches close every route:
+`SetAchievement`, `IndicateAchievementProgress`, `SetStat` ×2, `StoreStats`,
+`UploadLeaderboardScore`. Active only while a session or a rehearsal is running;
+**single player is untouched and achievements work normally**. The overlay reports
+how many calls have been blocked, and says loudly if the patches failed.
+
+**Compatibility is checked and stated, not assumed.** Nearly everything here binds
+to *names* — FSM names, state names, event names, PlayMaker globals, the path to
+the player mesh — and the developer can rename any of them in a patch without it
+looking like a breaking change from their side. The failure mode would otherwise be
+silent: machines that never claim, a wallet guard that never fires. So the mod
+verifies what it found and says what it didn't:
+
+- machine controllers (`Coin Machine Canvas CNTLR`)
+- `COINS Balance` / `TICKETS Balance` globals
+- the player rig at `PLAYER/LARRY Mesh`
+- the movement controller
+- the two PlayMaker hooks
+
+The overlay's **Health** panel lists anything missing, and the log says it once,
+plainly. Two players also compare an FNV-1a hash of `Assembly-CSharp.dll` at the
+handshake, so a mismatched pair find out immediately rather than through an hour of
+strange desyncs.
+
+### M8 — the things that go wrong
+
+**Your save is copied aside** the first time you host or join in a session, into
+`TcgMultiplayer_SaveBackups` next to the save itself. Five are kept. There's a button
+in the panel too. This is real insurance rather than a formality: close the game, copy
+a backup folder back over the save, and you're where you were.
+
+**Visiting someone else's island no longer follows you home.** When you join, you see
+the host's unlocks — their doors are open, their areas available. Your own progression
+is held aside and put back when you leave, keeping anything you unlocked yourself
+while visiting. This was the most dangerous thing about the mod and it's now the most
+tested: the self-check proves it against your real save in about two seconds.
+
+**Every per-frame subsystem is isolated.** A bug in one retires that feature for the
+session and says so in the panel, instead of throwing sixty times a second and taking
+the framerate with it. There's a button to try them again.
+
+**The mod refuses to join a host running a different version of it**, and says which
+version each of you has. Two different builds could read each other's packets wrongly,
+and the symptoms would look like anything except the real cause.
+
+**A session report** is written every time a session ends, into `TcgMultiplayer_Reports`.
+Duration, how it ended, everyone's ping and mod version, machines, mirrored events sent
+vs applied, physics count mismatches, payouts the wallet guard blocked, whether your
+progression was put back. Nothing is sent anywhere — it's a text file you choose to
+send.
+
+### The panel says what's actually wrong
+
+Opening the panel at the main menu used to produce a wall of red `MISSING:` lines —
+every check that can only pass once you're in a scene, failing exactly as designed, and
+reading to anyone sane as "this mod is broken". `Diagnosis.cs` now decides one
+plain-English line: waiting for Steam, waiting for a save, BepInEx is in the way,
+something switched itself off, or ready. It has no Unity in it, so the rig tests all
+256 combinations of its inputs — including that it never claims to be ready when it
+isn't.
+
+### Choosing a monitor
+
+The base game has no setting for this. **F8** cycles the game window between monitors,
+deliberately usable without being able to see the game, and the panel can remember one.
+The preference is stored by monitor *name* rather than slot, because an index breaks as
+soon as Windows reorders displays; an unplugged monitor falls back to the slot, and if
+neither matches the window is left alone rather than guessed at.
+
+### TcgRig — two peers, one machine, no Steam
+
+`Session.cs` is the biggest and most dangerous file here, and for most of this project
+none of it had ever been *run* with a second peer at the other end. Ten defects were
+found in it by reading and fixed by reasoning. Reasoning is not running.
+
+Steam sits behind two interfaces — `ITransport` and `ILobbyBackend` — whose real
+implementations forward to the code that was always there. The rig supplies fakes, so
+two (or three) real `Session` objects can talk to each other in one process, over a
+wire with configurable latency, jitter, packet loss and a cut-the-cable switch, on a
+clock the test controls. A thirty-second peer timeout costs a microsecond to exercise.
+
+    dotnet run --project TcgRig -c Release
+
+62 scenarios, about 75 ms. It has already caught a stray byte decoding as `Op.Bye` and
+silently dropping a live peer. It does **not** prove Steam delivers a byte between two
+houses, and there is only one world in it — see `TcgRig/README.md` for the full list of
+what a green run does and doesn't mean.
+
+Everything the rig tests is deliberately shaped so it *can* be: the decision lives in a
+pure class and the Unity glue is a thin shell over it. `Diagnosis`/`Health`,
+`DisplayChoice`/`DisplayManager`, `Seating`/`MachineDirector`, `MoverTrack`/
+`MoverReplicator`. The rule of thumb is that anything you'd otherwise have to reason
+about instead of run belongs on the left-hand side of one of those pairs.
+
+## Building
+
+Needs the .NET SDK. Copy the game assemblies each project's `libs\README.txt`
+lists out of `TheCoinGame\TheCoinGame_Data\Managed\`, then:
+
+```
+dotnet build -c Release TcgFsmDump\TcgFsmDump.csproj
+dotnet build -c Release TcgMultiplayer\TcgMultiplayer.csproj
+```
+
+A release build copies `TcgMultiplayer.dll` straight into the game's `Mods` folder.
+If your Steam library isn't on C:, point it somewhere else:
+
+```
+dotnet build -c Release TcgMultiplayer\TcgMultiplayer.csproj -p:TcgGameDir="D:\SteamLibrary\steamapps\common\TheCoinGame"
+```
+
+Close the game first — MelonLoader holds the DLL open while it's running, and the copy
+will warn and skip. The panel title shows the DLL's build time, so a stale build is
+visible at a glance.
+
+MelonLoader and HarmonyX come from NuGet. **No game assemblies are redistributed here** —
+`libs/*.dll` is gitignored, and each project's `libs\README.txt` lists what to copy out
+of your own install.
