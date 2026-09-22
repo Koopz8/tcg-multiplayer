@@ -1,11 +1,20 @@
 # tcg-multiplayer
 
-Multiplayer for **The Coin Game** (Steam app 598980). Two MelonLoader mods:
+Multiplayer for **The Coin Game** (Steam app 598980). Two to four players share an
+island over Steam: you walk around together, take turns on the machines, watch each
+other play, and everyone keeps their own money.
 
-| Mod | Purpose |
+Public beta, MIT licensed, and [on Nexus](https://www.nexusmods.com/thecoingame/mods/9).
+
+| Project | Purpose |
 |-----|---------|
+| **TcgMultiplayer** | The mod. Lobby and transport, player bodies, machine ownership and spectating, per-player wallets, a shared island, machine physics, and the safety work around all of it. |
+| **TcgRig** | A console harness that runs two real `Session` objects against a fake Steam with a clock it controls. 39 scenarios, ~40 ms. See `TcgRig/README.md`. |
 | **TcgFsmDump** | M0 — dumps every PlayMaker FSM graph to JSON and traces which events fire while you play. A research tool; keep it around. |
-| **TcgMultiplayer** | The mod itself. M1: Steam lobby and peer transport. M2: remote player avatars, plus a Mirror mode that makes them testable with one copy of the game. |
+
+**Status:** everything that can be verified on one machine is, and passes. What has
+*not* been exercised is two real computers talking to each other over Steam. That is
+the open question, and no amount of local testing closes it.
 
 Target: Unity **2022.3.62f3**, Mono x64, game build `22761496`.
 Loader: **MelonLoader 0.6.6** (HarmonyX 2.10.2).
@@ -218,12 +227,21 @@ is switched off, which is the same path a real spectator takes.
 |-----|---------|-------|
 | `ToggleKey` | `F9` | Any `KeyCode` name. |
 | `MaxPlayers` | `4` | 2–8. The bandwidth model is designed around 4. |
-| `OpenOverlayOnStart` | `true` | |
+| `OpenOverlayOnStart` | `false` | The panel stays shut until you press the toggle key. |
 | `SuppressGameInputWhileOpen` | `true` | Disables Rewired input maps so chat typing doesn't also drive the player. |
 | `SnapshotHz` | `15` | How often local position is sent. Plenty for walking speed. |
 | `InterpolationDelaySeconds` | `0.12` | How far in the past remote bodies render. |
 | `MirrorDelaySeconds` | `1.5` | Mirror mode ghost delay. |
 | `AnimatorSpeedScale` | `1.0` | Multiplies what's fed to the walk/run blend. Raise it if remote bodies glide with barely-moving legs; lower it if they sprint on the spot. |
+| `SelfTestKey` | `F10` | Runs the built-in self-check. |
+| `ReleaseEverythingKey` | `F11` | Unstick: releases every machine you're holding, and the input lock. |
+| `NextMonitorKey` | `F8` | Moves the game window to the next monitor. Works without being able to see the game. |
+| `PreferredMonitorName` | *(empty)* | Set from the panel. Blank this if the game ever opens somewhere you can't see it. |
+| `PreferredMonitorIndex` | `-1` | Fallback for when the monitor name doesn't match. |
+| `ConfineCursorToWindow` | `true` | Keeps the mouse inside the game while the panel is open. |
+| `BackupSaveBeforeSession` | `true` | Copies your save aside the first time you host or join. |
+| `BlockSteamStatsInSession` | `true` | See M7. Turning this off is not recommended. |
+| `GuestKeepsOwnProgression` | `true` | The visit model below. Off means a guest keeps whatever the host's island gave them. |
 
 ### Design notes
 
@@ -331,6 +349,70 @@ plainly. Two players also compare an FNV-1a hash of `Assembly-CSharp.dll` at the
 handshake, so a mismatched pair find out immediately rather than through an hour of
 strange desyncs.
 
+### M8 — the things that go wrong
+
+**Your save is copied aside** the first time you host or join in a session, into
+`TcgMultiplayer_SaveBackups` next to the save itself. Five are kept. There's a button
+in the panel too. This is real insurance rather than a formality: close the game, copy
+a backup folder back over the save, and you're where you were.
+
+**Visiting someone else's island no longer follows you home.** When you join, you see
+the host's unlocks — their doors are open, their areas available. Your own progression
+is held aside and put back when you leave, keeping anything you unlocked yourself
+while visiting. This was the most dangerous thing about the mod and it's now the most
+tested: the self-check proves it against your real save in about two seconds.
+
+**Every per-frame subsystem is isolated.** A bug in one retires that feature for the
+session and says so in the panel, instead of throwing sixty times a second and taking
+the framerate with it. There's a button to try them again.
+
+**The mod refuses to join a host running a different version of it**, and says which
+version each of you has. Two different builds could read each other's packets wrongly,
+and the symptoms would look like anything except the real cause.
+
+**A session report** is written every time a session ends, into `TcgMultiplayer_Reports`.
+Duration, how it ended, everyone's ping and mod version, machines, mirrored events sent
+vs applied, physics count mismatches, payouts the wallet guard blocked, whether your
+progression was put back. Nothing is sent anywhere — it's a text file you choose to
+send.
+
+### The panel says what's actually wrong
+
+Opening the panel at the main menu used to produce a wall of red `MISSING:` lines —
+every check that can only pass once you're in a scene, failing exactly as designed, and
+reading to anyone sane as "this mod is broken". `Diagnosis.cs` now decides one
+plain-English line: waiting for Steam, waiting for a save, BepInEx is in the way,
+something switched itself off, or ready. It has no Unity in it, so the rig tests all
+256 combinations of its inputs — including that it never claims to be ready when it
+isn't.
+
+### Choosing a monitor
+
+The base game has no setting for this. **F8** cycles the game window between monitors,
+deliberately usable without being able to see the game, and the panel can remember one.
+The preference is stored by monitor *name* rather than slot, because an index breaks as
+soon as Windows reorders displays; an unplugged monitor falls back to the slot, and if
+neither matches the window is left alone rather than guessed at.
+
+### TcgRig — two peers, one machine, no Steam
+
+`Session.cs` is the biggest and most dangerous file here, and for most of this project
+none of it had ever been *run* with a second peer at the other end. Ten defects were
+found in it by reading and fixed by reasoning. Reasoning is not running.
+
+Steam sits behind two interfaces — `ITransport` and `ILobbyBackend` — whose real
+implementations forward to the code that was always there. The rig supplies fakes, so
+two (or three) real `Session` objects can talk to each other in one process, over a
+wire with configurable latency, jitter, packet loss and a cut-the-cable switch, on a
+clock the test controls. A thirty-second peer timeout costs a microsecond to exercise.
+
+    dotnet run --project TcgRig -c Release
+
+39 scenarios, about 40 ms. It has already caught a stray byte decoding as `Op.Bye` and
+silently dropping a live peer. It does **not** prove Steam delivers a byte between two
+houses, and there is only one world in it — see `TcgRig/README.md` for the full list of
+what a green run does and doesn't mean.
+
 ## Building
 
 Needs the .NET SDK. Copy the game assemblies each project's `libs\README.txt`
@@ -341,4 +423,17 @@ dotnet build -c Release TcgFsmDump\TcgFsmDump.csproj
 dotnet build -c Release TcgMultiplayer\TcgMultiplayer.csproj
 ```
 
-MelonLoader and HarmonyX come from NuGet. Nothing is bundled into either mod.
+A release build copies `TcgMultiplayer.dll` straight into the game's `Mods` folder.
+If your Steam library isn't on C:, point it somewhere else:
+
+```
+dotnet build -c Release TcgMultiplayer\TcgMultiplayer.csproj -p:TcgGameDir="D:\SteamLibrary\steamapps\common\TheCoinGame"
+```
+
+Close the game first — MelonLoader holds the DLL open while it's running, and the copy
+will warn and skip. The panel title shows the DLL's build time, so a stale build is
+visible at a glance.
+
+MelonLoader and HarmonyX come from NuGet. **No game assemblies are redistributed here** —
+`libs/*.dll` is gitignored, and each project's `libs\README.txt` lists what to copy out
+of your own install.
