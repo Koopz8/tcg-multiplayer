@@ -228,7 +228,19 @@ namespace TcgMultiplayer.Ui
             GUILayout.BeginHorizontal();
             if (_s.State == SessionState.Offline)
             {
-                if (GUILayout.Button("Host", _btn, GUILayout.Height(24))) _s.Host(Plugin.MaxPlayers);
+                // In local test mode there is exactly one lobby and its id is a
+                // constant, so making someone read a 17-digit number off one
+                // window and type it into the other would be a nonsense.
+                if (Net.LocalTest.Active && !Net.LocalTest.IsHostWindow)
+                {
+                    if (GUILayout.Button("Join window 1", _btn, GUILayout.Height(24)))
+                        _s.Join(Net.LanLobbyBackend.TheLobby);
+                }
+                else
+                {
+                    if (GUILayout.Button("Host", _btn, GUILayout.Height(24))) _s.Host(Plugin.MaxPlayers);
+                }
+
                 if (GUILayout.Button(_showJoinField ? "Cancel join" : "Join by lobby ID", _btn, GUILayout.Height(24)))
                     _showJoinField = !_showJoinField;
             }
