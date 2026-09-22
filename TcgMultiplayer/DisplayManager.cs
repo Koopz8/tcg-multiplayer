@@ -209,6 +209,64 @@ namespace TcgMultiplayer
             }
         }
 
+        /// <summary>
+        /// Fullscreen, borderless or windowed. The base game has no setting for
+        /// this either, and it matters more than it sounds: two exclusive
+        /// fullscreen windows on one PC fight over the display every time focus
+        /// changes, which makes testing with two copies far more painful than
+        /// it needs to be. Windowed, you just put them side by side.
+        /// </summary>
+        public static bool SetMode(FullScreenMode mode)
+        {
+            try
+            {
+                Refresh();
+
+                int w, h;
+                int cur = Current;
+                if (cur >= 0 && cur < _layout.Count && _layout[cur].width > 0)
+                {
+                    w = _layout[cur].width;
+                    h = _layout[cur].height;
+                }
+                else
+                {
+                    w = Screen.currentResolution.width;
+                    h = Screen.currentResolution.height;
+                }
+
+                if (mode == FullScreenMode.Windowed)
+                {
+                    // A window the size of the screen puts its title bar off the
+                    // top edge, where it can't be grabbed. Leave room for it.
+                    w = Mathf.Max(800, Mathf.RoundToInt(w * 0.8f));
+                    h = Mathf.Max(600, Mathf.RoundToInt(h * 0.8f));
+                }
+
+                Screen.SetResolution(w, h, mode);
+                Status = Describe(mode) + " at " + w + "x" + h + ".";
+                Plugin.Log("Display: " + Status);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Status = "couldn't change the screen mode: " + ex.Message;
+                Plugin.Warn("Display: " + Status);
+                return false;
+            }
+        }
+
+        public static string Describe(FullScreenMode mode)
+        {
+            switch (mode)
+            {
+                case FullScreenMode.ExclusiveFullScreen: return "Fullscreen";
+                case FullScreenMode.FullScreenWindow: return "Borderless";
+                case FullScreenMode.MaximizedWindow: return "Maximised";
+                default: return "Windowed";
+            }
+        }
+
         /// <summary>Cycle to the next monitor. Usable without being able to see the game.</summary>
         public static bool MoveToNext()
         {

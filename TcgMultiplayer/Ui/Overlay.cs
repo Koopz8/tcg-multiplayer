@@ -111,12 +111,31 @@ namespace TcgMultiplayer.Ui
         /// between monitors changes the resolution under us, so a size that was
         /// fine a second ago can be taller than the display now.
         /// </summary>
+        /// <summary>
+        /// The size the player actually asked for, by dragging the grip.
+        ///
+        /// Kept apart from the drawn size because the drawn size gets clamped to
+        /// whatever the screen is right now, and "right now" briefly includes
+        /// being minimised. Minimising reports a screen a few pixels tall, the
+        /// old code squashed the panel to its 360x260 floor to fit, and since
+        /// that clamp could only ever shrink, restoring the window left the
+        /// panel squashed forever — everything crammed into a strip with
+        /// scrollbars through the middle of it. Clamping a remembered size
+        /// instead of the live one means the panel comes back.
+        /// </summary>
+        private float _wantW = 460f, _wantH = 560f;
+
         private void ClampToScreen()
         {
+            // Minimised, or mid-resolution-change. Anything computed from this
+            // is a number to throw away, not to save.
+            if (Screen.width < 200 || Screen.height < 200) return;
+
             float maxH = Mathf.Max(260f, Screen.height - 60f);
             float maxW = Mathf.Max(360f, Screen.width - 60f);
-            _rect.width = Mathf.Min(_rect.width, maxW);
-            _rect.height = Mathf.Min(_rect.height, maxH);
+
+            _rect.width = Mathf.Min(_wantW, maxW);
+            _rect.height = Mathf.Min(_wantH, maxH);
             _rect.x = Mathf.Clamp(_rect.x, 0f, Mathf.Max(0f, Screen.width - _rect.width));
             _rect.y = Mathf.Clamp(_rect.y, 0f, Mathf.Max(0f, Screen.height - _rect.height));
         }
@@ -165,8 +184,12 @@ namespace TcgMultiplayer.Ui
             }
             else if (e.type == EventType.MouseDrag && _resizing)
             {
-                _rect.width = Mathf.Max(340f, _rect.width + e.delta.x);
-                _rect.height = Mathf.Max(220f, _rect.height + e.delta.y);
+                // Drag sets the WANTED size. The drawn size follows from it once
+                // the screen has been taken into account.
+                _wantW = Mathf.Max(340f, _rect.width + e.delta.x);
+                _wantH = Mathf.Max(220f, _rect.height + e.delta.y);
+                _rect.width = _wantW;
+                _rect.height = _wantH;
                 e.Use();
             }
             else if (e.type == EventType.MouseUp && _resizing)
@@ -321,7 +344,14 @@ namespace TcgMultiplayer.Ui
                 GUILayout.EndHorizontal();
 
                 GUILayout.Label("Now running at " + Screen.width + "x" + Screen.height
-                              + " (" + Screen.fullScreenMode + ")", _mono);
+                              + "  ·  " + DisplayManager.Describe(Screen.fullScreenMode), _mono);
+
+                GUILayout.BeginHorizontal();
+                DrawModeButton("Fullscreen", FullScreenMode.ExclusiveFullScreen);
+                DrawModeButton("Borderless", FullScreenMode.FullScreenWindow);
+                DrawModeButton("Windowed", FullScreenMode.Windowed);
+                GUILayout.EndHorizontal();
+
                 if (GUILayout.Button("Match this monitor's resolution", _btn, GUILayout.Height(22)))
                     DisplayManager.MatchMonitor();
 
@@ -679,6 +709,20 @@ namespace TcgMultiplayer.Ui
                               + (_mc.Movers.IsSpectating(m.Id) ? " · following" : ""), _dim);
                 GUILayout.EndHorizontal();
             }
+        }
+
+        /// <summary>
+        /// One screen-mode button. The mode you are already in is shown pressed
+        /// and does nothing, rather than re-applying a resolution change for no
+        /// reason — SetResolution is not free and it flickers.
+        /// </summary>
+        private void DrawModeButton(string label, FullScreenMode mode)
+        {
+            bool here = Screen.fullScreenMode == mode;
+            GUI.enabled = !here;
+            if (GUILayout.Button(here ? "> " + label : label, _btn, GUILayout.Height(22)) && !here)
+                DisplayManager.SetMode(mode);
+            GUI.enabled = true;
         }
 
         private void DrawChat()
