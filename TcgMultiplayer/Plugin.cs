@@ -166,6 +166,12 @@ namespace TcgMultiplayer
 
             BuildTickDelegates();
             CompatCheck.ComputeGameHash();
+            Health.NoteStart();
+            // Read once, early, and say so loudly: if the player has BepInEx in
+            // the same folder they may well be reading this log precisely because
+            // nothing loaded the last time they tried.
+            if (Health.BepInExPresent)
+                Warn("Pick one mod loader. The other Coin Game mods use BepInEx; this one uses MelonLoader.");
 
             Log("Loaded. " + ToggleKeyName + " toggles the overlay, "
                 + (_pPanicKey != null ? _pPanicKey.Value : "F11") + " releases every machine.");
@@ -217,6 +223,7 @@ namespace TcgMultiplayer
 
             if (Hotkeys.Down(_pSelfTestKey != null ? _pSelfTestKey.Value : "F10"))
             {
+                SelfTest.LastDiagnosis = Health.Now(_session, _machines);
                 SelfTest.RunAll(_session, _machines, _world);
                 _overlay.Visible = true;
             }

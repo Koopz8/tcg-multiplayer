@@ -24,6 +24,7 @@
     <Compile Include="..\TcgMultiplayer\Net\ITransport.cs" Link="mod\ITransport.cs" />
     <Compile Include="..\TcgMultiplayer\Net\ILobbyBackend.cs" Link="mod\ILobbyBackend.cs" />
     <Compile Include="..\TcgMultiplayer\Game\PlayerRig.cs" Link="mod\PlayerRig.cs" />
+    <Compile Include="..\TcgMultiplayer\Diagnosis.cs" Link="mod\Diagnosis.cs" />
   </ItemGroup>
 
   <ItemGroup>

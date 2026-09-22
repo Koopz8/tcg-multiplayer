@@ -324,12 +324,24 @@ namespace TcgMultiplayer
         // ------------------------------------------------------------- report
 
         /// <summary>A block the player can paste straight into a bug report.</summary>
+        /// <summary>Set by the caller before Report(), so the paste explains itself.</summary>
+        public static Diagnosis LastDiagnosis;
+
         public static string Report()
         {
             var sb = new StringBuilder();
             sb.AppendLine("TcgMultiplayer " + Plugin.Version + " self-test");
             sb.AppendLine("game build " + (CompatCheck.GameHash ?? "unknown"));
             sb.AppendLine(Passed + " passed, " + Failed + " failed, " + Skipped + " skipped");
+            // Lead with the plain-English verdict. A list of skips means nothing
+            // to someone who has just installed this; "load a save first" does.
+            if (LastDiagnosis.Headline != null)
+            {
+                sb.AppendLine();
+                sb.AppendLine(LastDiagnosis.Headline);
+                if (!string.IsNullOrEmpty(LastDiagnosis.NextStep))
+                    sb.AppendLine(LastDiagnosis.NextStep);
+            }
             sb.AppendLine();
             foreach (var r in Results)
                 sb.AppendLine("[" + (r.Skipped ? "skip" : r.Ok ? " ok " : "FAIL") + "] " + r.Name

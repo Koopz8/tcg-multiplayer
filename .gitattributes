@@ -1,0 +1,28 @@
+# Normalise line endings once, so a whitespace-only change never again shows up
+# as a 584-line rewrite of install.ps1.
+#
+# Text is stored LF in the repo and checked out CRLF on Windows, which is what
+# Notepad and the PowerShell ISE expect. After adding this file, run:
+#
+#     git add --renormalize .
+#     git commit -m "Normalise line endings"
+#
+# once, and it stays quiet afterwards.
+
+* text=auto
+
+# Windows-only, and people open these in Notepad.
+*.bat    text eol=crlf
+*.ps1    text eol=crlf
+*.txt    text eol=crlf
+*.cs     text eol=crlf
+*.csproj text eol=crlf
+
+*.md     text eol=lf
+*.py     text eol=lf
+
+*.dll binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.exe binary

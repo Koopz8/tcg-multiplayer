@@ -71,9 +71,18 @@ namespace TcgMultiplayer.Ui
         {
             GUILayout.Space(2);
 
+            // One line, at the top, saying what is actually true right now.
+            // Without it, opening this at the main menu shows a wall of red
+            // MISSING lines — every check that can only pass once a save is
+            // loaded, failing exactly as designed, and reading to anyone sane
+            // as "this mod is broken".
+            var dx = Health.Now(_s, _mc);
+            GUILayout.Label(dx.Headline, dx.IsBad ? _alert : _head);
+            if (!string.IsNullOrEmpty(dx.NextStep)) GUILayout.Label(dx.NextStep, _dim);
+            GUILayout.Space(6);
+
             if (!_s.Ready)
             {
-                GUILayout.Label("Waiting for the game to initialise Steam...", _mono);
                 GUI.DragWindow(new Rect(0, 0, 10000, 20));
                 return;
             }
@@ -286,6 +295,7 @@ namespace TcgMultiplayer.Ui
 
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Run checks", GUILayout.Height(22)))
+                SelfTest.LastDiagnosis = Health.Now(_s, _mc);
                 SelfTest.RunAll(_s, _mc, _world);
             GUI.enabled = SelfTest.HasRun;
             if (GUILayout.Button("Copy result", GUILayout.Height(22)))
@@ -329,9 +339,18 @@ namespace TcgMultiplayer.Ui
             GUILayout.Space(6);
             GUILayout.Label("Health", _head);
             GUILayout.Label("build " + (CompatCheck.GameHash ?? "?") + "  ·  " + CompatCheck.Summary, _mono);
-            foreach (var c in CompatCheck.Items)
-                if (!c.Ok) GUILayout.Label("   MISSING: " + c.What
-                                           + (string.IsNullOrEmpty(c.Detail) ? "" : " — " + c.Detail), _dim);
+            // The per-item list is only meaningful once there is a save to bind
+            // against. Before that every line is a false alarm.
+            if (dx.Verdict == Verdict.Waiting)
+            {
+                GUILayout.Label("The list below fills in once a save is loaded.", _dim);
+            }
+            else
+            {
+                foreach (var c in CompatCheck.Items)
+                    if (!c.Ok) GUILayout.Label("   MISSING: " + c.What
+                                               + (string.IsNullOrEmpty(c.Detail) ? "" : " — " + c.Detail), _dim);
+            }
             GUILayout.Label("Steam stats: " + StatsLock.Status, _dim);
             GUILayout.Label("Cursor: " + CursorGuard.Status, _dim);
 

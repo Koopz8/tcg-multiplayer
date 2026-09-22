@@ -22,7 +22,11 @@ namespace TcgRig
             int passed = 0, failed = 0;
             var sw = Stopwatch.StartNew();
 
-            foreach (var scenario in Scenarios.All)
+            var all = new System.Collections.Generic.List<Func<Check>>();
+            all.AddRange(Scenarios.All);
+            all.AddRange(DiagnosisScenarios.All);
+
+            foreach (var scenario in all)
             {
                 TcgMultiplayer.Plugin.Echo = verbose;
                 var c = scenario();
