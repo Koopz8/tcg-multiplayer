@@ -759,6 +759,18 @@ namespace TcgMultiplayer.Ui
                 return "the panel has your keyboard while the caret is in a text box. "
                      + "Click away from the chat box, or press " + Plugin.ToggleKeyName + ".";
 
+            // The one that took a week to find. A machine the mod has frozen so
+            // it refuses someone else's card can take the player standing at it
+            // down with it, and from the outside that is indistinguishable from
+            // the game hanging. Name it.
+            foreach (var m in _mc.Machines)
+            {
+                if (m == null || !m.Frozen) continue;
+                return "the mod has " + m.Label + " locked because "
+                     + (m.OwnerName ?? "another player") + " is using it, and it has taken you "
+                     + "with it. Unstick me, below, or F11.";
+            }
+
             return null;
         }
 

@@ -179,6 +179,19 @@ namespace TcgMultiplayer.Game
             public Transform Body;
             public int BodyUp;
             public bool IsMover;
+
+            /// <summary>
+            /// Whether WE put this controller into "Machine Is Frozen".
+            ///
+            /// Losing this is worse than losing the rest, because it is the
+            /// only record that there is something to undo. A rebuild handed
+            /// back a Machine with Frozen false while the graph was still sat
+            /// in the frozen state, so Unfreeze returned early, the release
+            /// never went out, and the machine stayed dead for the rest of the
+            /// session. That is how a stuck player became a permanently stuck
+            /// player.
+            /// </summary>
+            public bool Frozen;
         }
 
         private readonly Dictionary<uint, Learned> _learned = new Dictionary<uint, Learned>();
@@ -189,8 +202,14 @@ namespace TcgMultiplayer.Game
             foreach (var kv in _byId)
             {
                 var m = kv.Value;
-                if (m.Body == null && !m.IsMover) continue;
-                _learned[kv.Key] = new Learned { Body = m.Body, BodyUp = m.BodyUp, IsMover = m.IsMover };
+                if (m.Body == null && !m.IsMover && !m.Frozen) continue;
+                _learned[kv.Key] = new Learned
+                {
+                    Body = m.Body,
+                    BodyUp = m.BodyUp,
+                    IsMover = m.IsMover,
+                    Frozen = m.Frozen,
+                };
             }
 
             Clear();
@@ -236,6 +255,7 @@ namespace TcgMultiplayer.Game
                 if (_learned.TryGetValue(id, out known))
                 {
                     machine.IsMover = known.IsMover;
+                    machine.Frozen = known.Frozen;
                     if (known.Body != null)
                     {
                         machine.Body = known.Body;

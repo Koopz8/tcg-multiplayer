@@ -45,6 +45,7 @@ namespace TcgRig
             GuessingAheadIsCapped,
             RidingIsDetectedByMovingTogether,
             StandingNextToAParkedCartIsNotRidingIt,
+            AStandingWatcherIsNotRidingACartThatCreepsPast,
             ConfidenceFallsFasterThanItRises,
 
             // --- over the wire
@@ -447,6 +448,49 @@ namespace TcgRig
                     conf = RideDetect.Advance(conf, RideDetect.MovesWith(new Vector3(0.3f, 0f, 0f), Vector3.zero));
                 Assert.True(!RideDetect.IsRiding(conf), "not riding one you walk past");
                 c.Detail = "the machine has to actually be going somewhere";
+            });
+        }
+
+        private static Check AStandingWatcherIsNotRidingACartThatCreepsPast()
+        {
+            return Run("a cart creeping past a standing watcher does not swallow them", c =>
+            {
+                // From the two-window trace. Window 2 stood still; window 1
+                // drove by slowly; window 2's log filled with "you're in
+                // CONTROLLERS (it's moving with you)" four times in five
+                // seconds. The hole was arithmetic, not circumstantial:
+                // anything moving between MinMotion and Tolerance per sample is
+                // within Tolerance of a zero player delta, so the two halves of
+                // the test agreed with each other about a player who had not
+                // moved at all.
+                int worst = 0;
+                for (float speed = RideDetect.MinMotion; speed <= 0.4f; speed += 0.005f)
+                {
+                    int conf = 0;
+                    for (int i = 0; i < 40; i++)
+                        conf = RideDetect.Advance(conf,
+                            RideDetect.MovesWith(Vector3.zero, new Vector3(speed, 0f, 0f)));
+                    if (conf > worst) worst = conf;
+                    Assert.True(!RideDetect.IsRiding(conf),
+                                "standing still is not riding something moving at " + speed + "/sample");
+                }
+
+                // Nor is drifting a little while it goes past at walking pace.
+                int c2 = 0;
+                for (int i = 0; i < 40; i++)
+                    c2 = RideDetect.Advance(c2,
+                        RideDetect.MovesWith(new Vector3(0f, 0f, 0.05f), new Vector3(0.09f, 0f, 0f)));
+                Assert.True(!RideDetect.IsRiding(c2), "nor is walking across its path");
+
+                // And a genuine passenger still gets in, at the same slow speeds.
+                int c3 = 0;
+                var crawl = new Vector3(0.05f, 0f, 0f);
+                for (int i = 0; i < RideDetect.NeedSamples; i++)
+                    c3 = RideDetect.Advance(c3, RideDetect.MovesWith(crawl + new Vector3(0.004f, 0f, 0f), crawl));
+                Assert.True(RideDetect.IsRiding(c3), "a real rider is still detected at crawling speed");
+
+                c.Detail = "swept " + ((0.4f - RideDetect.MinMotion) / 0.005f).ToString("0")
+                           + " speeds, highest confidence reached " + worst;
             });
         }
 

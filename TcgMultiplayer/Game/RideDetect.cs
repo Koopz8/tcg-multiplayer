@@ -56,8 +56,28 @@ namespace TcgMultiplayer.Game
         /// <summary>Do these two look like one thing carrying the other?</summary>
         public static bool MovesWith(Vector3 playerDelta, Vector3 machineDelta)
         {
-            if (machineDelta.magnitude < MinMotion) return false;
-            return (playerDelta - machineDelta).magnitude <= Tolerance;
+            float mm = machineDelta.magnitude;
+            if (mm < MinMotion) return false;
+
+            // The player has to be going somewhere too.
+            //
+            // Without this the test has a hole you could drive a golf cart
+            // through, and something did. MinMotion is 3cm and Tolerance is
+            // 12cm, so anything creeping past a STANDING player at between
+            // 0.3 and 1.2 m/s satisfies both halves at once: the machine is
+            // moving enough to count, and a zero player delta is within
+            // tolerance of it. A watcher stood on the pavement was repeatedly
+            // told they were inside a cart driving by.
+            if (playerDelta.magnitude < MinMotion) return false;
+
+            // And they have to be going the same way, judged against how far
+            // the machine actually went rather than against a flat 12cm.
+            // Riding is lockstep — the two deltas agree to within noise — so a
+            // proportional bound costs a real passenger nothing and refuses a
+            // bystander who merely happens to be walking at the time.
+            float allow = mm * 0.5f;
+            if (allow > Tolerance) allow = Tolerance;
+            return (playerDelta - machineDelta).magnitude <= allow;
         }
 
         /// <summary>

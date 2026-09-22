@@ -527,15 +527,63 @@ namespace TcgMultiplayer.Game
             // Nothing is lost by skipping it. Ownership already refuses the
             // claim, which is the whole point; the freeze was only ever the
             // visible half of that.
-            if (m.IsMover)
+            // ...but IsMover on its own was not enough, and the logs said so.
+            //
+            // A guest learns a thing travels by watching it travel. The freeze
+            // lands the instant ownership is announced — which is when the
+            // driver puts their card in, not when they pull away. In the two
+            // window trace those were 39 seconds apart: the cart was frozen at
+            // 09:36:13 with IsMover still false, and only at 09:36:52, when the
+            // host finally drove, did anyone work out it was a vehicle. The
+            // guard was correct and arrived 39 seconds late, which for the
+            // person standing there is the same as not existing.
+            //
+            // So ask the question that can be answered immediately: is this
+            // controller bolted to a body? That is true of every vehicle before
+            // it has moved a centimetre, and false of a cabinet bolted to the
+            // floor.
+            if (m.IsMover || PartOfAMovingBody(m))
             {
-                Plugin.Log("Not freezing " + m.Label + " — it's a vehicle, and freezing one "
-                           + "traps whoever is standing near it.");
+                m.IsMover = true;
+                Plugin.Log("Not freezing " + m.Label + " — it's mounted on something that moves, "
+                           + "and freezing one of those traps whoever is standing near it.");
                 return;
             }
 
             m.Frozen = true;
             SendToController(m, "FREEZE MACHINE");
+        }
+
+        /// <summary>
+        /// Is this machine's controller mounted on a body, rather than on the
+        /// scenery?
+        ///
+        /// Deliberately physical rather than nominal. A vehicle's card reader
+        /// hangs underneath the vehicle's rigidbody — GOLFCART_Vehicle for the
+        /// cart — because that is what makes it travel with it. An arcade
+        /// cabinet's hangs under a district's static hierarchy, which has no
+        /// rigidbody anywhere above it.
+        ///
+        /// Looking UP matters. Looking down would catch every coin pusher in
+        /// the arcade, whose whole point is a tray of loose rigidbodies; those
+        /// hang below the machine and say nothing about whether the machine
+        /// itself goes anywhere.
+        /// </summary>
+        private static bool PartOfAMovingBody(Machine m)
+        {
+            if (m == null || m.Root == null) return false;
+            try
+            {
+                var t = m.Root;
+                int guard = 0;
+                while (t != null && guard++ < 10)
+                {
+                    if (t.GetComponent<Rigidbody>() != null) return true;
+                    t = t.parent;
+                }
+            }
+            catch { }
+            return false;
         }
 
         private void Unfreeze(Machine m)
@@ -722,6 +770,7 @@ namespace TcgMultiplayer.Game
                     m.IsMover = true;
                     MoverReplicator.Measure(m);
                 }
+                if (m.Frozen) Unfreeze(m);
 
                 RidingMachine = m.Id;
 
@@ -1088,6 +1137,17 @@ namespace TcgMultiplayer.Game
                 m.IsMover = true;
                 MoverReplicator.Measure(m);
                 Plugin.Log("Mover: " + m.Label + " travels (its driver said so).");
+
+                // Last line of defence. If we froze this before we knew what it
+                // was — a ride with no rigidbody of its own, say — undo it the
+                // moment the evidence arrives, rather than leaving it dead
+                // until its owner gets out.
+                if (m.Frozen)
+                {
+                    Plugin.Warn("Unfreezing " + m.Label + " — we froze it, and it has turned out "
+                                + "to be something people ride.");
+                    Unfreeze(m);
+                }
             }
 
             Movers.Push(m, pose);
