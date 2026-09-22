@@ -51,6 +51,18 @@ namespace TcgMultiplayer.Game
 
         private readonly List<ulong> _evacuated = new List<ulong>();
 
+        // Riding detection: who is carrying the player, worked out from motion
+        // rather than from any FSM state name. See RideDetect.
+        private readonly Dictionary<uint, int> _rideConfidence = new Dictionary<uint, int>();
+        private readonly Dictionary<uint, Vector3> _lastRootPos = new Dictionary<uint, Vector3>();
+        private readonly List<uint> _rideScratch = new List<uint>();
+        private Vector3 _lastPlayerPos;
+        private bool _havePlayerPos;
+        private float _nextRideSampleAt;
+
+        /// <summary>The thing currently carrying the local player, or 0.</summary>
+        public uint RidingMachine { get; private set; }
+
         // Set while we're replaying a mirrored event, so it isn't re-broadcast.
         private static bool _applying;
 
@@ -282,17 +294,20 @@ namespace TcgMultiplayer.Game
             // The vehicle you are driving, in world space. Separate from the
             // rigidbody stream above and sent alongside it: that one carries the
             // wheels relative to the car, this one carries the car.
-            if (MyMachine != 0 && _session.State == SessionState.InLobby
+            uint streamId = RidingMachine != 0 ? RidingMachine : MyMachine;
+            if (streamId != 0 && _session.State == SessionState.InLobby
                 && _session.Peers.Count > 0 && Movers.ShouldSend(Time.time))
             {
                 Machine mine;
-                if (_registry.TryGet(MyMachine, out mine) && mine.OwnedByMe && mine.IsMover)
+                if (_registry.TryGet(streamId, out mine) && mine.OwnedByMe && mine.IsMover)
                     _session.SendObjectState(mine.Id, Movers.Pack(mine));
             }
 
             // Vehicles first, then the things inside them: the wheels are packed
             // relative to the body, so the body has to be in the right place
             // before they are placed against it.
+            DetectRiding();
+
             Movers.Render(LookupMachine);
             Physics.Render();
 
@@ -337,6 +352,15 @@ namespace TcgMultiplayer.Game
         public void RequestClaim(Machine m)
         {
             if (m == null || !Enabled) return;
+
+            // Never claim something the player is carrying. CONTROLLERS lives
+            // under the player rig and moves whenever they do, which made it
+            // look like an occupied machine and got it claimed, frozen for
+            // everyone else and streamed as a vehicle.
+            var rig = RigSource != null ? RigSource() : null;
+            if (rig != null && rig.Valid && rig.Root != null && m.Root != null
+                && m.Root.IsChildOf(rig.Root))
+                return;
             if (m.Owner != 0 && m.Owner != _session.SelfId.m_SteamID)
             {
                 // Do NOT freeze here. If the player has already got far enough into
@@ -593,6 +617,166 @@ namespace TcgMultiplayer.Game
         }
 
         /// <summary>
+        /// Work out what, if anything, is carrying the player, by watching
+        /// whether the two move as one body.
+        ///
+        /// This replaces relying on the game's card-insert states, which are
+        /// right for cabinets and silent for everything you climb into — so a
+        /// golf cart was never claimed and never replicated, while CONTROLLERS
+        /// (an object the player carries, so it moves whenever they do) was
+        /// claimed instead.
+        /// </summary>
+        private void DetectRiding()
+        {
+            if (Time.time < _nextRideSampleAt) return;
+            _nextRideSampleAt = Time.time + RideDetect.SampleInterval;
+
+            var rig = RigSource != null ? RigSource() : null;
+            if (rig == null || !rig.Valid || rig.Mesh == null)
+            {
+                _havePlayerPos = false;
+                return;
+            }
+
+            var here = rig.Mesh.position;
+            if (!_havePlayerPos)
+            {
+                _havePlayerPos = true;
+                _lastPlayerPos = here;
+                SnapshotRoots();
+                return;
+            }
+
+            var playerDelta = here - _lastPlayerPos;
+            _lastPlayerPos = here;
+
+            // Already aboard something: hold on until we're plainly away from
+            // it. A parked vehicle you're sitting in produces no motion to
+            // test, so distance is the only honest measure of getting out.
+            if (RidingMachine != 0)
+            {
+                Machine cur;
+                if (_registry.TryGet(RidingMachine, out cur) && cur.Moving != null
+                    && RideDetect.StillAboard(Vector3.Distance(here, cur.Moving.position)))
+                {
+                    ResolveBody(cur, playerDelta);
+                    SnapshotRoots();
+                    return;
+                }
+
+                Plugin.Log("Ride: got out of " + (cur != null ? cur.Label : "it") + ".");
+                var was = RidingMachine;
+                RidingMachine = 0;
+                _rideConfidence.Clear();
+                Machine leave;
+                if (_registry.TryGet(was, out leave)) ReleaseIfMine(leave);
+                SnapshotRoots();
+                return;
+            }
+
+            var playerRoot = rig.Root;
+
+            foreach (var m in _registry.All)
+            {
+                if (m == null || m.Root == null) continue;
+
+                // Things the player carries move exactly with the player by
+                // definition. That is what claimed CONTROLLERS the first time.
+                if (playerRoot != null && m.Root.IsChildOf(playerRoot)) continue;
+
+                Vector3 was;
+                if (!_lastRootPos.TryGetValue(m.Id, out was)) continue;
+
+                bool together = RideDetect.MovesWith(playerDelta, m.Root.position - was);
+
+                int c;
+                _rideConfidence.TryGetValue(m.Id, out c);
+                c = RideDetect.Advance(c, together);
+                _rideConfidence[m.Id] = c;
+
+                if (!RideDetect.IsRiding(c)) continue;
+
+                // It demonstrably travels, and it is carrying us.
+                if (!m.IsMover)
+                {
+                    m.IsMover = true;
+                    MoverReplicator.Measure(m);
+                }
+
+                RidingMachine = m.Id;
+
+                // The full path matters here, not just the label. In this game
+                // the "machine" is whatever object carries the card-reader FSM,
+                // and on a vehicle that may well be a reader bolted to the
+                // vehicle rather than the vehicle itself — in which case
+                // streaming this root moves the reader and leaves the cart
+                // behind. Worth being able to see which it is.
+                Plugin.Log("Ride: you're in " + m.Label + " (it's moving with you). path=" + m.Path
+                           + " extents=" + m.Extents + " rideable=" + m.Rideable);
+                RequestClaim(m);
+                break;
+            }
+
+            SnapshotRoots();
+        }
+
+        private readonly Dictionary<int, Vector3> _lastAncestorPos = new Dictionary<int, Vector3>();
+
+        /// <summary>
+        /// Find the thing that actually travels.
+        ///
+        /// The machine is rooted where the game's card-reader FSM lives, and on
+        /// the golf cart that is
+        /// PLAYER_Vehicles/GOLF CART/GOLFCART_Vehicle/CONTROLLERS — the steering
+        /// controls, five centimetres across. Streaming that sent an invisible
+        /// cube around the island and left the cart parked.
+        ///
+        /// So walk up while each parent is still moving with us and take the
+        /// highest one that is. The first ancestor that ISN'T moving with us is
+        /// the scenery the vehicle is standing in, and everything below it is
+        /// the vehicle. No names, so it works on all of them.
+        /// </summary>
+        private void ResolveBody(Machine m, Vector3 playerDelta)
+        {
+            if (m == null || m.Root == null) return;
+
+            var best = m.Root;
+            var t = m.Root.parent;
+            int guard = 0;
+
+            while (t != null && guard++ < 8)
+            {
+                Vector3 was;
+                if (_lastAncestorPos.TryGetValue(t.GetInstanceID(), out was))
+                {
+                    if (!RideDetect.MovesWith(playerDelta, t.position - was)) break;
+                    best = t;
+                }
+                _lastAncestorPos[t.GetInstanceID()] = t.position;
+                t = t.parent;
+            }
+
+            if (m.Body == best) return;
+
+            m.Body = best;
+
+            // The size is the vehicle's now, not the control panel's, so seats
+            // and whether anyone can ride it both have to be worked out again.
+            m.MeasuredExtents = false;
+            MoverReplicator.Measure(m);
+            Plugin.Log("Ride: the thing that actually moves is " + NetId.Path(best)
+                       + " — extents " + m.Extents + ", seats " + m.Capacity
+                       + ", rideable " + m.Rideable + ".");
+        }
+
+        private void SnapshotRoots()
+        {
+            _rideScratch.Clear();
+            foreach (var m in _registry.All)
+                if (m != null && m.Root != null) _lastRootPos[m.Id] = m.Root.position;
+        }
+
+        /// <summary>
         /// What the local player is aboard, for the avatar stream — as a
         /// passenger OR as the driver.
         ///
@@ -627,10 +811,13 @@ namespace TcgMultiplayer.Game
                 // Driving: only for things that travel. Standing at a coin
                 // pusher is not being inside it, and pinning a body to a
                 // cabinet's notional seat would look worse than leaving it be.
-                if (MyMachine == 0) return new Attachment();
+                // What is carrying us, which is not the same question as what we
+                // own — and is answered by watching, not by FSM state names.
+                uint id = RidingMachine != 0 ? RidingMachine : MyMachine;
+                if (id == 0) return new Attachment();
 
                 Machine mine;
-                if (!_registry.TryGet(MyMachine, out mine)) return new Attachment();
+                if (!_registry.TryGet(id, out mine)) return new Attachment();
                 if (!mine.IsMover || !mine.OwnedByMe) return new Attachment();
 
                 return new Attachment

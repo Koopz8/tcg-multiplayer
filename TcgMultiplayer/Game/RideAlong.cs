@@ -78,7 +78,7 @@ namespace TcgMultiplayer.Game
         /// </summary>
         public bool Board(Machine m, int seat, PlayerRig rig)
         {
-            if (m == null || m.Root == null || rig == null || !rig.Valid) return false;
+            if (m == null || m.Moving == null || rig == null || !rig.Valid) return false;
             if (seat < 0) return false;
 
             if (Riding != 0 && Riding != m.Id) Leave(rig, "moved to another seat");
@@ -134,11 +134,11 @@ namespace TcgMultiplayer.Game
         public bool Hold(Machine m, PlayerRig rig)
         {
             if (Riding == 0) return true;
-            if (m == null || m.Root == null || rig == null || !rig.Valid || rig.Mesh == null) return false;
+            if (m == null || m.Moving == null || rig == null || !rig.Valid || rig.Mesh == null) return false;
 
             try
             {
-                var target = m.Root.TransformPoint(Seating.Offset(Seat, m.Extents));
+                var target = m.Moving.TransformPoint(Seating.Offset(Seat, m.Extents));
 
                 // The seat offset positions the BODY, but what we can actually
                 // move is the PLAYER root, and the mesh hangs off it at an

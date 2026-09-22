@@ -236,7 +236,7 @@ namespace TcgMultiplayer
             _avatars.AttachmentRoot = id =>
             {
                 Machine m;
-                return _machines.TryGetMachine(id, out m) && m.Root != null ? m.Root : null;
+                return _machines.TryGetMachine(id, out m) && m.Moving != null ? m.Moving : null;
             };
             _world = new WorldState(_session);
             _world.Configure(pWorldPrefixes.Value);
@@ -520,12 +520,14 @@ namespace TcgMultiplayer
         {
             if (_instance != null) _instance.LoggerInstance.Msg(msg);
             else MelonLogger.Msg(msg);
+            LocalTest.Tee(msg);
         }
 
         internal static void Warn(string msg)
         {
             if (_instance != null) _instance.LoggerInstance.Warning(msg);
             else MelonLogger.Warning(msg);
+            LocalTest.Tee("WARN  " + msg);
         }
     }
 }

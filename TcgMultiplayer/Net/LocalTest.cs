@@ -146,6 +146,61 @@ namespace TcgMultiplayer.Net
         public static void Tick()
         {
             if (Active && Lobby != null) Lobby.Tick();
+            FlushLog();
+        }
+
+        // ------------------------------------------------------------ logging
+        //
+        // Both windows are one process each but share one MelonLoader\Latest.log,
+        // and the second to start wins it. That cost real time: a diagnosis was
+        // made from the watching window's log and confidently applied to the
+        // driving window, which had never been seen at all. Each window gets its
+        // own copy here so there is always both halves of the story.
+
+        private static readonly System.Text.StringBuilder _pending = new System.Text.StringBuilder();
+        private static string _logPath;
+        private static float _nextFlushAt;
+
+        public static void Tee(string line)
+        {
+            if (!Active || line == null) return;
+            lock (_pending)
+            {
+                if (_pending.Length > 64 * 1024) return;   // runaway guard
+                _pending.Append(DateTime.Now.ToString("HH:mm:ss.fff")).Append("  ")
+                        .Append(line).Append(Environment.NewLine);
+            }
+        }
+
+        /// <summary>Batched, because this is called from the game's own log path.</summary>
+        private static void FlushLog()
+        {
+            if (!Active) return;
+            if (Time.realtimeSinceStartup < _nextFlushAt) return;
+            _nextFlushAt = Time.realtimeSinceStartup + 1f;
+
+            string chunk;
+            lock (_pending)
+            {
+                if (_pending.Length == 0) return;
+                chunk = _pending.ToString();
+                _pending.Length = 0;
+            }
+
+            try
+            {
+                if (_logPath == null)
+                {
+                    Directory.CreateDirectory(Folder);
+                    _logPath = Path.Combine(Folder, "log_window" + (Slot + 1) + ".txt");
+                    File.WriteAllText(_logPath, "TcgMultiplayer " + Plugin.Version + " — "
+                                      + LanAddressing.NameForSlot(Slot) + Environment.NewLine
+                                      + "started " + DateTime.Now + Environment.NewLine
+                                      + new string('-', 60) + Environment.NewLine);
+                }
+                File.AppendAllText(_logPath, chunk);
+            }
+            catch { /* a lost log line is not worth a crash */ }
         }
 
         public static void Stop()

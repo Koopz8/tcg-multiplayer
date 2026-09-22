@@ -43,6 +43,9 @@ namespace TcgRig
             ParkingItBackDoesNotUnmakeIt,
             IdleJitterIsNotDriving,
             GuessingAheadIsCapped,
+            RidingIsDetectedByMovingTogether,
+            StandingNextToAParkedCartIsNotRidingIt,
+            ConfidenceFallsFasterThanItRises,
 
             // --- over the wire
             APoseSurvivesTheWire,
@@ -398,6 +401,77 @@ namespace TcgRig
 
         // MoverReplicator itself is Unity-side; its cap is the number under test.
         private const float MoverReplicatorCap = 0.4f;
+
+
+        // ------------------------------------------------- am I inside this
+
+        private static Check RidingIsDetectedByMovingTogether()
+        {
+            return Run("being in a vehicle is spotted by moving as one body, not by a state name", c =>
+            {
+                // The cart never fired a card-insert state, so it was never
+                // claimed and never replicated. Motion is the thing that is
+                // actually true of riding something.
+                int conf = 0;
+                var step = new Vector3(0.4f, 0f, 0.1f);
+                for (int i = 0; i < RideDetect.NeedSamples; i++)
+                {
+                    // Not identical - the rig and the vehicle root are moved by
+                    // different systems in the same frame and always disagree a
+                    // little.
+                    var mine = step + new Vector3(0.02f, 0f, -0.01f);
+                    conf = RideDetect.Advance(conf, RideDetect.MovesWith(mine, step));
+                }
+                Assert.True(RideDetect.IsRiding(conf), "riding after " + RideDetect.NeedSamples + " samples");
+                Assert.True(RideDetect.StillAboard(2f), "and stays aboard while near the root");
+                Assert.True(!RideDetect.StillAboard(RideDetect.HoldDistance + 1f), "until you walk away");
+                c.Detail = "no FSM state names, so a renamed vehicle still works";
+            });
+        }
+
+        private static Check StandingNextToAParkedCartIsNotRidingIt()
+        {
+            return Run("standing beside a parked cart is not riding it", c =>
+            {
+                // Both deltas are zero, which matches perfectly and must not
+                // count - otherwise anyone standing still next to anything is
+                // declared to be inside it.
+                int conf = 0;
+                for (int i = 0; i < 20; i++)
+                    conf = RideDetect.Advance(conf, RideDetect.MovesWith(Vector3.zero, Vector3.zero));
+                Assert.True(!RideDetect.IsRiding(conf), "not riding a parked cart");
+
+                // Walking past one is not riding it either.
+                conf = 0;
+                for (int i = 0; i < 20; i++)
+                    conf = RideDetect.Advance(conf, RideDetect.MovesWith(new Vector3(0.3f, 0f, 0f), Vector3.zero));
+                Assert.True(!RideDetect.IsRiding(conf), "not riding one you walk past");
+                c.Detail = "the machine has to actually be going somewhere";
+            });
+        }
+
+        private static Check ConfidenceFallsFasterThanItRises()
+        {
+            return Run("getting out is noticed faster than getting in", c =>
+            {
+                int conf = 0;
+                for (int i = 0; i < RideDetect.MaxConfidence + 5; i++) conf = RideDetect.Advance(conf, true);
+                Assert.Eq(conf, RideDetect.MaxConfidence, "confidence is capped");
+
+                int rises = 0;
+                int x = 0;
+                while (!RideDetect.IsRiding(x)) { x = RideDetect.Advance(x, true); rises++; }
+
+                int falls = 0;
+                x = RideDetect.MaxConfidence;
+                while (RideDetect.IsRiding(x)) { x = RideDetect.Advance(x, false); falls++; }
+
+                Assert.True(falls <= rises, "falls at least as fast as it rises ("
+                            + falls + " vs " + rises + ")");
+                Assert.Eq(RideDetect.Advance(0, false), 0, "and never goes negative");
+                c.Detail = "a false positive puts you in a car you're stood beside; a false negative costs 0.1s";
+            });
+        }
 
         // ------------------------------------------------------------ the wire
 

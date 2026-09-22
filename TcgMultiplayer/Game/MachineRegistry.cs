@@ -54,6 +54,25 @@ namespace TcgMultiplayer.Game
         /// </summary>
         public readonly List<ulong> Seats = new List<ulong>();
 
+        /// <summary>
+        /// The thing that actually travels, which is NOT always Root.
+        ///
+        /// A machine is rooted wherever the game's card-reader FSM lives, and on
+        /// a vehicle that turns out to be a sub-object:
+        /// PLAYER_Vehicles/GOLF CART/GOLFCART_Vehicle/CONTROLLERS — the steering
+        /// controls, five centimetres across, two levels below the cart. Sending
+        /// that object's position to everyone else moved a tiny invisible cube
+        /// around the island while the cart it belongs to stayed parked.
+        ///
+        /// Worked out by walking up from Root while each parent is still moving
+        /// with the player, so it needs no names and finds the right object on
+        /// anything you can climb into.
+        /// </summary>
+        public Transform Body;
+
+        /// <summary>Root, unless we've found the larger thing it is bolted to.</summary>
+        public Transform Moving { get { return Body != null ? Body : Root; } }
+
         /// <summary>Half-extents of the thing, for working out where seats are.</summary>
         public Vector3 Extents = new Vector3(0.9f, 0.8f, 1.8f);
         public bool MeasuredExtents;

@@ -28,6 +28,7 @@
     <Compile Include="..\TcgMultiplayer\DisplayChoice.cs" Link="mod\DisplayChoice.cs" />
     <Compile Include="..\TcgMultiplayer\Game\MoverTrack.cs" Link="mod\MoverTrack.cs" />
     <Compile Include="..\TcgMultiplayer\Game\Seating.cs" Link="mod\Seating.cs" />
+    <Compile Include="..\TcgMultiplayer\Game\RideDetect.cs" Link="mod\RideDetect.cs" />
     <Compile Include="..\TcgMultiplayer\Net\LanAddressing.cs" Link="mod\LanAddressing.cs" />
   </ItemGroup>
 

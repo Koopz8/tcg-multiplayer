@@ -126,12 +126,14 @@ namespace TcgMultiplayer.Game
         /// </summary>
         public static void Measure(Machine m)
         {
-            if (m == null || m.MeasuredExtents || m.Root == null) return;
+            if (m == null || m.Root == null) return;
             m.MeasuredExtents = true;
 
             try
             {
-                var rends = m.Root.GetComponentsInChildren<Renderer>();
+                var target = m.Moving;
+                if (target == null) return;
+                var rends = target.GetComponentsInChildren<Renderer>();
                 if (rends == null || rends.Length == 0) return;
 
                 bool any = false;
@@ -152,7 +154,7 @@ namespace TcgMultiplayer.Game
                             c.x + ((k & 1) == 0 ? -e.x : e.x),
                             c.y + ((k & 2) == 0 ? -e.y : e.y),
                             c.z + ((k & 4) == 0 ? -e.z : e.z));
-                        var local = m.Root.InverseTransformPoint(corner);
+                        var local = target.InverseTransformPoint(corner);
 
                         if (!any) { min = max = local; any = true; continue; }
                         min = Vector3.Min(min, local);
@@ -232,7 +234,7 @@ namespace TcgMultiplayer.Game
             if (!t.MadeKinematic)
             {
                 t.MadeKinematic = true;
-                t.Body = m.Root.GetComponent<Rigidbody>();
+                t.Body = m.Moving.GetComponent<Rigidbody>();
                 if (t.Body != null) t.Body.isKinematic = true;
             }
 
