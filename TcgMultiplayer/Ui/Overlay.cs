@@ -77,7 +77,7 @@ namespace TcgMultiplayer.Ui
             // MISSING lines — every check that can only pass once a save is
             // loaded, failing exactly as designed, and reading to anyone sane
             // as "this mod is broken".
-            var dx = Health.Now(_s, _mc);
+            var dx = Health.Now(_s, _mc, _av);
             GUILayout.Label(dx.Headline, dx.IsBad ? _alert : _head);
             if (!string.IsNullOrEmpty(dx.NextStep)) GUILayout.Label(dx.NextStep, _dim);
             GUILayout.Space(6);
@@ -296,8 +296,10 @@ namespace TcgMultiplayer.Ui
 
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Run checks", GUILayout.Height(22)))
-                SelfTest.LastDiagnosis = Health.Now(_s, _mc);
+            {
+                SelfTest.LastDiagnosis = Health.Now(_s, _mc, _av);
                 SelfTest.RunAll(_s, _mc, _world);
+            }
             GUI.enabled = SelfTest.HasRun;
             if (GUILayout.Button("Copy result", GUILayout.Height(22)))
             {

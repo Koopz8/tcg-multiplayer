@@ -245,7 +245,7 @@ namespace TcgMultiplayer
 
             if (Hotkeys.Down(_pSelfTestKey != null ? _pSelfTestKey.Value : "F10"))
             {
-                SelfTest.LastDiagnosis = Health.Now(_session, _machines);
+                SelfTest.LastDiagnosis = Health.Now(_session, _machines, _avatars);
                 SelfTest.RunAll(_session, _machines, _world);
                 _overlay.Visible = true;
             }

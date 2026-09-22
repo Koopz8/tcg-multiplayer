@@ -29,9 +29,22 @@ namespace TcgMultiplayer
     public struct Signals
     {
         public bool SteamReady;
-        /// <summary>Economy globals readable — the honest proxy for "a save is loaded".</summary>
-        public bool SaveLoaded;
+
+        /// <summary>
+        /// The player exists in a scene. This, not the economy globals, is what
+        /// "in the game rather than the menu" means: the 254 economy globals are
+        /// PlayMaker globals and they read perfectly well at the title screen,
+        /// which is how the panel came to announce "save loaded" over the main
+        /// menu with a wallet showing $30.
+        /// </summary>
+        public bool InWorld;
+
+        /// <summary>Economy globals resolved. True at the menu too — not a save signal.</summary>
+        public bool EconomyReadable;
+
         public int MachinesFound;
+        /// <summary>How long we have been in a scene. Machines register a few seconds after a load.</summary>
+        public double SecondsInWorld;
         public int CompatTotal;
         public int CompatFailed;
         /// <summary>Another mod loader in the same game folder.</summary>
@@ -56,6 +69,9 @@ namespace TcgMultiplayer
         /// <summary>Grace period before a missing Steam is worth mentioning.</summary>
         public const double SettleSeconds = 20.0;
 
+        /// <summary>How long after entering a scene before an empty machine list is odd.</summary>
+        public const double MachineGraceSeconds = 15.0;
+
         public static Diagnosis Of(Signals s)
         {
             // Worst first. Two mod loaders is the one that ends with the game
@@ -74,12 +90,12 @@ namespace TcgMultiplayer
                         "Launch from Steam rather than from the .exe, and make sure Steam is "
                         + "running and signed in.");
 
-            // Almost everything the mod binds to only exists once a save is
-            // loaded. Saying so is the whole point of this class.
-            if (!s.SaveLoaded)
+            // Almost everything the mod binds to only exists once you are in a
+            // scene. Saying so is the whole point of this class.
+            if (!s.InWorld)
                 return Make(Verdict.Waiting,
-                    "No save loaded yet — most checks below can't run from the main menu.",
-                    "Load your game, then open this panel again. Nothing here is a problem yet.");
+                    "You're not in the game yet — most checks below can't run from the main menu.",
+                    "Load your save, then open this panel again. Nothing here is a problem yet.");
 
             if (s.RetiredSubsystems > 0)
                 return Make(Verdict.Warning,
@@ -87,6 +103,12 @@ namespace TcgMultiplayer
                         ? "One part of the mod switched itself off after repeated errors."
                         : s.RetiredSubsystems + " parts of the mod switched themselves off after repeated errors.",
                     "Press \"Try those again\" below. If it comes back, send MelonLoader\\Latest.log.");
+
+            if (!s.EconomyReadable)
+                return Make(Verdict.Warning,
+                    "In the game, but the economy globals aren't readable.",
+                    "The wallet guard can't protect your money without them. Worth reporting "
+                    + "with your MelonLoader log.");
 
             if (s.CompatTotal > 0 && s.CompatFailed > 0)
                 return Make(Verdict.Warning,
@@ -96,10 +118,15 @@ namespace TcgMultiplayer
                     + "check for a newer mod version, and report the game version with the list below.");
 
             if (s.MachinesFound == 0)
-                return Make(Verdict.Warning,
-                    "Save loaded, but no machines were found.",
-                    "Walk into the arcade and open this again. If it stays at zero, that's a bug "
-                    + "worth reporting.");
+                // They register a few seconds after a scene load, so zero is
+                // normal for a moment and only a problem if it persists.
+                return s.SecondsInWorld < MachineGraceSeconds
+                    ? Make(Verdict.Waiting, "Looking for machines...", null)
+                    : Make(Verdict.Warning,
+                        "In the game, but no machines were found.",
+                        "If you're outdoors this is normal — walk into the arcade. If you're "
+                        + "standing among the cabinets, press Rescan, and report it if that "
+                        + "doesn't help.");
 
             if (s.InSession)
                 return Make(Verdict.Ready,

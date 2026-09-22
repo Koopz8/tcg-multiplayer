@@ -20,6 +20,8 @@ namespace TcgRig
             CompatFailuresOnlyCountWithASave,
             ReadyAndConnectedReadDifferently,
             EveryVerdictSaysSomething,
+            EconomyGlobalsAreNotASaveSignal,
+            MachinesGetAGracePeriod,
         };
 
         private static Check Run(string name, Action<Check> body)
@@ -37,8 +39,10 @@ namespace TcgRig
             return new Signals
             {
                 SteamReady = true,
-                SaveLoaded = true,
+                InWorld = true,
+                EconomyReadable = true,
                 MachinesFound = 14,
+                SecondsInWorld = 120,
                 CompatTotal = 12,
                 CompatFailed = 0,
                 BepInExPresent = false,
@@ -55,15 +59,19 @@ namespace TcgRig
                 // The screenshot that started this: a wall of red MISSING lines
                 // at the main menu, every one of them working as designed.
                 var s = Healthy();
-                s.SaveLoaded = false;
+                s.InWorld = false;
                 s.MachinesFound = 0;
+                s.SecondsInWorld = 0;
                 s.CompatFailed = 9;        // all of them, because nothing is bound yet
+                // The economy globals ARE readable at the title screen. That is
+                // the whole trap this scenario exists to hold shut.
+                s.EconomyReadable = true;
 
                 var d = Diagnosis.Of(s);
                 Assert.Eq(d.Verdict, Verdict.Waiting, "verdict is Waiting");
                 Assert.True(!d.IsBad, "it is not flagged as a problem");
-                Assert.True(d.Headline.IndexOf("save", StringComparison.OrdinalIgnoreCase) >= 0,
-                            "the headline mentions the save: " + d.Headline);
+                Assert.True(d.Headline.IndexOf("not in the game", StringComparison.OrdinalIgnoreCase) >= 0,
+                            "the headline says we're not in the game: " + d.Headline);
                 Assert.True(d.NextStep != null && d.NextStep.IndexOf("Load", StringComparison.OrdinalIgnoreCase) >= 0,
                             "it tells them to load the game");
                 Assert.True(d.Headline.IndexOf("MISSING", StringComparison.Ordinal) < 0,
@@ -81,7 +89,7 @@ namespace TcgRig
                 // reading the log precisely because nothing loaded last time.
                 var s = Healthy();
                 s.BepInExPresent = true;
-                s.SaveLoaded = false;
+                s.InWorld = false;
                 s.SteamReady = false;
                 s.RetiredSubsystems = 3;
                 s.CompatFailed = 9;
@@ -148,11 +156,11 @@ namespace TcgRig
                 var s = Healthy();
                 s.CompatFailed = 4;
 
-                s.SaveLoaded = false;
+                s.InWorld = false;
                 Assert.Eq(Diagnosis.Of(s).Verdict, Verdict.Waiting,
-                          "without a save, they are not evidence of anything");
+                          "at the menu, they are not evidence of anything");
 
-                s.SaveLoaded = true;
+                s.InWorld = true;
                 var d = Diagnosis.Of(s);
                 Assert.Eq(d.Verdict, Verdict.Warning, "with a save, they are");
                 Assert.True(d.Headline.IndexOf("4 of 12", StringComparison.Ordinal) >= 0,
@@ -185,6 +193,52 @@ namespace TcgRig
             });
         }
 
+        private static Check EconomyGlobalsAreNotASaveSignal()
+        {
+            return Run("readable economy globals do not mean you're in the game", c =>
+            {
+                // Shipped wrong once. The panel sat over the main menu announcing
+                // "Save loaded, but no machines were found" with a wallet showing
+                // $30, because the 254 economy globals are PlayMaker globals and
+                // they resolve at the title screen like any other.
+                var s = Healthy();
+                s.InWorld = false;
+                s.EconomyReadable = true;    // exactly what the menu looks like
+                s.MachinesFound = 0;
+
+                var d = Diagnosis.Of(s);
+                Assert.Eq(d.Verdict, Verdict.Waiting, "still just waiting");
+                Assert.True(d.Headline.IndexOf("machines", StringComparison.OrdinalIgnoreCase) < 0,
+                            "it does not complain about machines: " + d.Headline);
+                Assert.True(d.Headline.IndexOf("Save loaded", StringComparison.OrdinalIgnoreCase) < 0,
+                            "and it does not claim a save is loaded: " + d.Headline);
+
+                c.Detail = "\"" + d.Headline + "\"";
+            });
+        }
+
+        private static Check MachinesGetAGracePeriod()
+        {
+            return Run("an empty machine list is patience first, a warning later", c =>
+            {
+                // They register a few seconds after a scene load, so zero is
+                // normal for a moment.
+                var s = Healthy();
+                s.MachinesFound = 0;
+
+                s.SecondsInWorld = 2;
+                Assert.Eq(Diagnosis.Of(s).Verdict, Verdict.Waiting, "two seconds in, still looking");
+
+                s.SecondsInWorld = Diagnosis.MachineGraceSeconds + 5;
+                var late = Diagnosis.Of(s);
+                Assert.Eq(late.Verdict, Verdict.Warning, "twenty seconds in, worth saying");
+                Assert.True(late.NextStep.IndexOf("outdoors", StringComparison.OrdinalIgnoreCase) >= 0,
+                            "and it allows for simply being outside: " + late.NextStep);
+
+                c.Detail = "quiet for " + Diagnosis.MachineGraceSeconds + "s, then explains";
+            });
+        }
+
         private static Check EveryVerdictSaysSomething()
         {
             return Run("no combination of signals produces an empty or vague verdict", c =>
@@ -193,7 +247,8 @@ namespace TcgRig
                 // a blank line, and must never claim Ready while something is off.
                 int checkedCount = 0;
                 foreach (bool steam in new[] { false, true })
-                foreach (bool save in new[] { false, true })
+                foreach (bool inWorld in new[] { false, true })
+                foreach (bool econ in new[] { false, true })
                 foreach (bool bep in new[] { false, true })
                 foreach (int retired in new[] { 0, 2 })
                 foreach (int failed in new[] { 0, 3 })
@@ -203,9 +258,11 @@ namespace TcgRig
                 {
                     var s = new Signals
                     {
-                        SteamReady = steam, SaveLoaded = save, BepInExPresent = bep,
+                        SteamReady = steam, InWorld = inWorld, EconomyReadable = econ,
+                        BepInExPresent = bep,
                         RetiredSubsystems = retired, CompatTotal = 12, CompatFailed = failed,
-                        MachinesFound = machines, InSession = inSession, SecondsSinceLoad = age,
+                        MachinesFound = machines, InSession = inSession,
+                        SecondsSinceLoad = age, SecondsInWorld = age,
                     };
                     var d = Diagnosis.Of(s);
                     checkedCount++;
@@ -216,7 +273,8 @@ namespace TcgRig
 
                     if (d.Verdict == Verdict.Ready)
                     {
-                        Assert.True(steam && save && !bep && retired == 0 && failed == 0 && machines > 0,
+                        Assert.True(steam && inWorld && econ && !bep && retired == 0
+                                    && failed == 0 && machines > 0,
                                     "Ready is only claimed when everything really is ready");
                     }
                     if (d.Verdict == Verdict.Broken)

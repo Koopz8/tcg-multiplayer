@@ -66,6 +66,23 @@ namespace TcgMultiplayer
 
         public static void RunAll(Session session, MachineDirector machines, WorldState world)
         {
+
+            // This writes files and stashes the player's progression, and it is
+
+            // reachable from OnGUI, which runs more than once per frame. One
+
+            // unbraced if turned it into a per-frame loop that wrote ten thousand
+
+            // save backups and a 14 MB log before the game could be shut down.
+
+            // It now refuses to run that often whatever the caller does.
+
+            if (UnityEngine.Time.realtimeSinceStartup - _lastRunAt < MinSecondsBetweenRuns
+
+                && _lastRunAt > 0f) return;
+
+            _lastRunAt = UnityEngine.Time.realtimeSinceStartup;
+
             Results.Clear();
             Plugin.Log("Running self-test...");
 
@@ -326,6 +343,10 @@ namespace TcgMultiplayer
         /// <summary>A block the player can paste straight into a bug report.</summary>
         /// <summary>Set by the caller before Report(), so the paste explains itself.</summary>
         public static Diagnosis LastDiagnosis;
+
+        /// <summary>A full run is expensive and touches the save. Once every this often, at most.</summary>
+        public const float MinSecondsBetweenRuns = 2f;
+        private static float _lastRunAt;
 
         public static string Report()
         {

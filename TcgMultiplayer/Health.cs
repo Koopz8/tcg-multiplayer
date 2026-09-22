@@ -46,7 +46,10 @@ namespace TcgMultiplayer
             }
         }
 
-        public static Signals Gather(Net.Session session, Game.MachineDirector machines)
+        private static float _enteredWorldAt = -1f;
+
+        public static Signals Gather(Net.Session session, Game.MachineDirector machines,
+                                     Game.AvatarDirector avatars)
         {
             int total = 0, failed = 0;
             try
@@ -55,23 +58,33 @@ namespace TcgMultiplayer
             }
             catch { }
 
-            bool saveLoaded = false;
+            bool economy = false;
             int machineCount = 0;
             try
             {
                 if (machines != null)
                 {
-                    saveLoaded = machines.Wallet != null && machines.Wallet.Available;
+                    economy = machines.Wallet != null && machines.Wallet.Available;
                     machineCount = machines.MachineCount;
                 }
             }
             catch { }
 
+            // The player rig only exists in a playable scene. The economy globals
+            // do not make that distinction — they read fine at the title screen.
+            bool inWorld = false;
+            try { inWorld = avatars != null && avatars.RigReady; } catch { }
+
+            if (inWorld && _enteredWorldAt < 0) _enteredWorldAt = Time.realtimeSinceStartup;
+            else if (!inWorld) _enteredWorldAt = -1f;
+
             return new Signals
             {
                 SteamReady = session != null && session.Ready,
-                SaveLoaded = saveLoaded,
+                InWorld = inWorld,
+                EconomyReadable = economy,
                 MachinesFound = machineCount,
+                SecondsInWorld = _enteredWorldAt < 0 ? 0 : Time.realtimeSinceStartup - _enteredWorldAt,
                 CompatTotal = total,
                 CompatFailed = failed,
                 BepInExPresent = BepInExPresent,
@@ -87,9 +100,10 @@ namespace TcgMultiplayer
             catch { return 0; }
         }
 
-        public static Diagnosis Now(Net.Session session, Game.MachineDirector machines)
+        public static Diagnosis Now(Net.Session session, Game.MachineDirector machines,
+                                    Game.AvatarDirector avatars)
         {
-            return Diagnosis.Of(Gather(session, machines));
+            return Diagnosis.Of(Gather(session, machines, avatars));
         }
     }
 }
