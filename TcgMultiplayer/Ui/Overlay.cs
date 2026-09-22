@@ -19,7 +19,7 @@ namespace TcgMultiplayer.Ui
         private readonly AvatarDirector _av;
         private readonly MachineDirector _mc;
         private readonly WorldState _world;
-        private Rect _rect = new Rect(24, 24, 470, 600);
+        private Rect _rect = new Rect(24, 24, 460, 560);
         private Vector2 _scroll;
         // The body scrolls. Without this the panel simply clipped at 430px and
         // everything past "Shared island" — self-test, performance, monitor,
@@ -84,10 +84,9 @@ namespace TcgMultiplayer.Ui
             _win.onNormal.background = _bgTex;
             _win.normal.textColor = brass;
             _win.onNormal.textColor = brass;
-            _win.border = new RectOffset(0, 0, 0, 0);
-            // Top padding clears the title bar. Without it the first line of
-            // content is drawn straight through the title.
-            _win.padding = new RectOffset(12, 12, 26, 10);
+            // Border and padding are left exactly as the skin has them. Zeroing
+            // the border is what drew the title straight through the first line
+            // of content — the title is painted inside the border region.
             _win.fontSize = 12;
 
             // Every text style wraps. Anything that doesn't wrap runs off the
@@ -122,9 +121,63 @@ namespace TcgMultiplayer.Ui
             _rect.y = Mathf.Clamp(_rect.y, 0f, Mathf.Max(0f, Screen.height - _rect.height));
         }
 
+        private const float TitleH = 22f;
+        private const float Pad = 10f;
+
+        /// <summary>
+        /// GUILayout inside a GUI.Window grows the window to fit its widest
+        /// child. One long unwrapped line was enough to stretch this panel to
+        /// most of the screen — and once the window is bigger than the content,
+        /// the scroll view never scrolls and the bottom falls off the display.
+        ///
+        /// Laying the body out inside a fixed Rect breaks that feedback loop:
+        /// the window size is decided here, and the content has to live in it.
+        /// </summary>
         private void DrawWindow(int id)
         {
-            GUILayout.Space(2);
+            var body = new Rect(Pad, TitleH,
+                                Mathf.Max(120f, _rect.width - Pad * 2f),
+                                Mathf.Max(60f, _rect.height - TitleH - Pad));
+
+            GUILayout.BeginArea(body);
+            DrawBody();
+            GUILayout.EndArea();
+
+            ResizeGrip();
+            GUI.DragWindow(new Rect(0, 0, 10000, TitleH));
+        }
+
+        private bool _resizing;
+
+        /// <summary>Bottom-right corner drags the panel bigger or smaller.</summary>
+        private void ResizeGrip()
+        {
+            var grip = new Rect(_rect.width - 18f, _rect.height - 18f, 16f, 16f);
+            GUI.Label(grip, "◢", _dim);
+
+            var e = Event.current;
+            if (e == null) return;
+
+            if (e.type == EventType.MouseDown && grip.Contains(e.mousePosition))
+            {
+                _resizing = true;
+                e.Use();
+            }
+            else if (e.type == EventType.MouseDrag && _resizing)
+            {
+                _rect.width = Mathf.Max(340f, _rect.width + e.delta.x);
+                _rect.height = Mathf.Max(220f, _rect.height + e.delta.y);
+                e.Use();
+            }
+            else if (e.type == EventType.MouseUp && _resizing)
+            {
+                _resizing = false;
+                e.Use();
+            }
+        }
+
+        private void DrawBody()
+        {
 
             // One line, at the top, saying what is actually true right now.
             // Without it, opening this at the main menu shows a wall of red
@@ -136,11 +189,7 @@ namespace TcgMultiplayer.Ui
             if (!string.IsNullOrEmpty(dx.NextStep)) GUILayout.Label(dx.NextStep, _dim);
             GUILayout.Space(6);
 
-            if (!_s.Ready)
-            {
-                GUI.DragWindow(new Rect(0, 0, 10000, 20));
-                return;
-            }
+            if (!_s.Ready) return;
 
             // ---- anything actually wrong, first and unmissable ------------
             // These used to be console warnings, which on a public release means
@@ -180,7 +229,7 @@ namespace TcgMultiplayer.Ui
             if (_s.State == SessionState.Offline)
             {
                 if (GUILayout.Button("Host", _btn, GUILayout.Height(24))) _s.Host(Plugin.MaxPlayers);
-                if (GUILayout.Button(_showJoinField ? "Cancel join" : "Join by lobby ID", GUILayout.Height(24)))
+                if (GUILayout.Button(_showJoinField ? "Cancel join" : "Join by lobby ID", _btn, GUILayout.Height(24)))
                     _showJoinField = !_showJoinField;
             }
             else
@@ -467,15 +516,8 @@ namespace TcgMultiplayer.Ui
             // marked "Fake: friend takes it".
             GUILayout.Space(6);
             _showAdvanced = GUILayout.Toggle(_showAdvanced, "  Testing tools (no second player needed)");
-            if (!_showAdvanced)
+            if (_showAdvanced)
             {
-                GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status
-                          + (TypingInABox ? " — typing, so the game isn't listening" : "") + ".", _dim);
-                DrawChat();
-                GUI.DragWindow(new Rect(0, 0, 10000, 20));
-                return;
-            }
-
             GUILayout.Label("Ownership, spectating and the wallet guard only fire when someone "
                           + "else plays. These stand in for that friend.", _dim);
 
@@ -528,12 +570,17 @@ namespace TcgMultiplayer.Ui
 
             if (GUILayout.Button("Release everything (stuck in a machine?)", _btn, GUILayout.Height(22)))
                 _mc.ReleaseEverything();
+            }
+
+            // The scroll closes here, so the log and the chat box stay pinned to
+            // the bottom of the panel instead of scrolling away with everything
+            // else. It also means no path can return past an unclosed scroll
+            // view, which is what the old early-return did once this was added.
+            GUILayout.EndScrollView();
 
             GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status
                           + (TypingInABox ? " — typing, so the game isn't listening" : "") + ".", _dim);
             DrawChat();
-            GUILayout.EndScrollView();
-            GUI.DragWindow(new Rect(0, 0, 10000, 20));
         }
 
         private void DrawChat()
