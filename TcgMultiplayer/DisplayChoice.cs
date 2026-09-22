@@ -105,6 +105,84 @@ namespace TcgMultiplayer
             return Plan(target, why);
         }
 
+        /// <summary>Where the window goes, and at what size, once a monitor is chosen.</summary>
+        public struct Placement
+        {
+            public int X, Y;              // desktop coordinates for the window's top-left
+            public int Width, Height;     // the resolution to run at
+            public bool ChangesResolution;
+            public string Why;
+        }
+
+        /// <summary>
+        /// Place the window on a monitor without wrecking the player's settings.
+        ///
+        /// The first version of this got both halves wrong, and the symptom was
+        /// a game that came back cropped and at the wrong resolution:
+        ///
+        /// 1. It forced the resolution to the target monitor's NATIVE size on
+        ///    every move. Unity persists resolution, so one press of the cycle
+        ///    key silently and permanently overrode whatever the player had
+        ///    chosen in the game's own video settings — and it stayed overridden
+        ///    on later launches, where the mod looked innocent because it hadn't
+        ///    moved anything.
+        /// 2. It then placed that full-monitor-sized window 40 px in from the
+        ///    corner, so 40 px of it hung off the right and bottom edges. That
+        ///    is not a subtle bug: it is literally cropping the game.
+        ///
+        /// The rule now: moving a window between monitors is a move. It changes
+        /// the resolution only when the current one genuinely cannot fit, and it
+        /// never pushes the window off the screen it was asked to move to.
+        /// </summary>
+        public static Placement Place(int currentWidth, int currentHeight,
+                                      int workX, int workY, int workWidth, int workHeight,
+                                      int monitorWidth, int monitorHeight,
+                                      bool fullscreen)
+        {
+            var p = new Placement();
+
+            // Guard against a monitor the OS reports as nonsense rather than
+            // propagating a zero into Screen.SetResolution.
+            if (monitorWidth <= 0) monitorWidth = Math.Max(1, currentWidth);
+            if (monitorHeight <= 0) monitorHeight = Math.Max(1, currentHeight);
+            if (workWidth <= 0) workWidth = monitorWidth;
+            if (workHeight <= 0) workHeight = monitorHeight;
+
+            if (fullscreen)
+            {
+                // Fullscreen at anything other than the monitor's native size is
+                // the scaled, slightly-soft, sometimes-letterboxed picture people
+                // describe as "not my resolution". Here matching IS the right
+                // thing — and the window fills the monitor, so there is no offset.
+                p.X = workX;
+                p.Y = workY;
+                p.Width = monitorWidth;
+                p.Height = monitorHeight;
+                p.ChangesResolution = currentWidth != monitorWidth || currentHeight != monitorHeight;
+                p.Why = p.ChangesResolution
+                    ? "Fullscreen, so the resolution now matches the monitor (" + monitorWidth + "x" + monitorHeight + ")."
+                    : "Moved. Already at the monitor's own resolution.";
+                return p;
+            }
+
+            // Windowed: keep what the player chose. Shrink only if it genuinely
+            // will not fit, and say so when we do.
+            p.Width = currentWidth > 0 ? Math.Min(currentWidth, workWidth) : workWidth;
+            p.Height = currentHeight > 0 ? Math.Min(currentHeight, workHeight) : workHeight;
+            p.ChangesResolution = p.Width != currentWidth || p.Height != currentHeight;
+
+            // Centred in the work area, never negative, never hanging off the
+            // edge. A window the same size as the screen lands exactly on it.
+            p.X = workX + Math.Max(0, (workWidth - p.Width) / 2);
+            p.Y = workY + Math.Max(0, (workHeight - p.Height) / 2);
+
+            p.Why = p.ChangesResolution
+                ? "Moved. " + currentWidth + "x" + currentHeight + " doesn't fit, so it's now "
+                  + p.Width + "x" + p.Height + "."
+                : "Moved, and your resolution is untouched (" + p.Width + "x" + p.Height + ").";
+            return p;
+        }
+
         /// <summary>Next monitor along, wrapping. The blind escape hatch behind the hotkey.</summary>
         public static int Next(int count, int current)
         {

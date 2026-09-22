@@ -286,6 +286,11 @@ namespace TcgMultiplayer.Ui
                     Plugin.ForgetMonitor();
                 GUILayout.EndHorizontal();
 
+                GUILayout.Label("Now running at " + Screen.width + "x" + Screen.height
+                              + " (" + Screen.fullScreenMode + ")", _mono);
+                if (GUILayout.Button("Match this monitor's resolution", _btn, GUILayout.Height(22)))
+                    DisplayManager.MatchMonitor();
+
                 GUILayout.Label(DisplayManager.Status, _dim);
                 GUILayout.Label(Plugin.NextMonitorKeyName + " cycles monitors — works even when you can't "
                               + "see the game.", _dim);

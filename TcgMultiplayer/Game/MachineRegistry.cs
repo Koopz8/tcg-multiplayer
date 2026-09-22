@@ -60,6 +60,16 @@ namespace TcgMultiplayer.Game
 
         public int Capacity { get { return Seating.Capacity(Extents); } }
 
+        /// <summary>
+        /// Moving is not the same as rideable. A bus's card reader travels
+        /// because the bus does; the player's own controllers travel because the
+        /// player does. Neither is something you can sit in.
+        /// </summary>
+        public bool Rideable
+        {
+            get { return IsMover && MeasuredExtents && Seating.FitsAPerson(Extents); }
+        }
+
         /// <summary>Seat the local player is in, or -1.</summary>
         public int MySeat = -1;
     }

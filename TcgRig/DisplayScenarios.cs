@@ -25,6 +25,11 @@ namespace TcgRig
             ReorderedMonitorsStillMatchByName,
             CycleWraps,
             EveryPlanExplainsItself,
+            MovingDoesNotTouchYourResolution,
+            AWindowIsNeverPlacedOffTheScreen,
+            FullscreenMatchesTheMonitor,
+            AResolutionTooBigForTheMonitorIsShrunk,
+            EveryPlacementLandsOnTheMonitor,
         };
 
         private static Check Run(string name, Action<Check> body)
@@ -187,6 +192,110 @@ namespace TcgRig
                     }
                 }
                 c.Detail = n + " combinations, every target in range";
+            });
+        }
+
+        // ------------------------------------------------- placing the window
+        //
+        // These exist because the first version of the placement code shipped
+        // and came back as "the game is cropped and isn't my natural
+        // resolution". It forced the monitor's native resolution on every move
+        // — which Unity then SAVED, so it outlived the move and made the mod
+        // look innocent on the next launch — and it placed that full-size
+        // window 40px in from the corner, hanging two edges off the screen.
+
+        private static Check MovingDoesNotTouchYourResolution()
+        {
+            return Run("moving to another monitor leaves your chosen resolution alone", c =>
+            {
+                // Player runs 1600x900 windowed; target monitor is 1920x1080.
+                var p = DisplayChoice.Place(1600, 900, 0, 0, 1920, 1040, 1920, 1080, false);
+
+                Assert.Eq(p.Width, 1600, "width untouched");
+                Assert.Eq(p.Height, 900, "height untouched");
+                Assert.True(!p.ChangesResolution, "and nothing is reported as changed");
+                c.Detail = "\"" + p.Why + "\"";
+            });
+        }
+
+        private static Check AWindowIsNeverPlacedOffTheScreen()
+        {
+            return Run("a window the size of the screen lands ON the screen, not 40px past it", c =>
+            {
+                // The exact case that cropped the game: window as big as the work area.
+                var p = DisplayChoice.Place(1920, 1080, 0, 0, 1920, 1080, 1920, 1080, false);
+
+                Assert.Eq(p.X, 0, "left edge on the monitor");
+                Assert.Eq(p.Y, 0, "top edge on the monitor");
+                Assert.True(p.X + p.Width <= 1920, "right edge on the monitor");
+                Assert.True(p.Y + p.Height <= 1080, "bottom edge on the monitor");
+                c.Detail = "was (40,40) with a 1920x1080 window — 40px off two edges";
+            });
+        }
+
+        private static Check FullscreenMatchesTheMonitor()
+        {
+            return Run("fullscreen does match the monitor, because there it's the right thing", c =>
+            {
+                var p = DisplayChoice.Place(1600, 900, 0, 0, 1920, 1040, 1920, 1080, true);
+
+                Assert.Eq(p.Width, 1920, "native width");
+                Assert.Eq(p.Height, 1080, "native height");
+                Assert.True(p.ChangesResolution, "and it says it changed something");
+                Assert.Eq(p.X, 0, "filling the monitor, so no offset");
+                c.Detail = "fullscreen at a non-native size is the soft, letterboxed picture";
+            });
+        }
+
+        private static Check AResolutionTooBigForTheMonitorIsShrunk()
+        {
+            return Run("1440p on a 1080p monitor is shrunk to fit, and says so", c =>
+            {
+                var p = DisplayChoice.Place(2560, 1440, 0, 0, 1920, 1040, 1920, 1080, false);
+
+                Assert.True(p.Width <= 1920, "fits the width");
+                Assert.True(p.Height <= 1040, "fits the work area height");
+                Assert.True(p.ChangesResolution, "reported as a change");
+                Assert.True(p.Why.IndexOf("doesn't fit", StringComparison.OrdinalIgnoreCase) >= 0,
+                            "and explains itself: " + p.Why);
+                c.Detail = "\"" + p.Why + "\"";
+            });
+        }
+
+        private static Check EveryPlacementLandsOnTheMonitor()
+        {
+            return Run("sweep: no combination of resolution and monitor puts the window off-screen", c =>
+            {
+                int[] w = { 800, 1280, 1600, 1920, 2560, 3440 };
+                int[] h = { 600, 720, 900, 1080, 1440 };
+                int[] mw = { 1280, 1920, 2560, 3840 };
+                int[] mh = { 720, 1080, 1440, 2160 };
+                int[] ox = { 0, -1920, 2560 };          // monitors left of and right of the primary
+                int n = 0;
+
+                foreach (int cw in w)
+                foreach (int ch in h)
+                foreach (int m1 in mw)
+                foreach (int m2 in mh)
+                foreach (int x in ox)
+                foreach (bool full in new[] { false, true })
+                {
+                    // Work area is the monitor minus a taskbar.
+                    var p = DisplayChoice.Place(cw, ch, x, 0, m1, m2 - 40, m1, m2, full);
+                    n++;
+
+                    Assert.True(p.Width > 0 && p.Height > 0, "a usable resolution");
+                    Assert.True(p.Width <= m1 && p.Height <= m2,
+                                "never bigger than the monitor (" + p.Width + "x" + p.Height
+                                + " on " + m1 + "x" + m2 + ")");
+                    Assert.True(p.X >= x, "never left of the monitor");
+                    Assert.True(p.X + p.Width <= x + m1,
+                                "never past its right edge (" + p.X + "+" + p.Width + " on " + m1 + ")");
+                    Assert.True(p.Y >= 0 && p.Y + p.Height <= m2, "never past top or bottom");
+                    Assert.True(!string.IsNullOrEmpty(p.Why), "and always says what it did");
+                }
+
+                c.Detail = n + " placements, every one fully on its monitor";
             });
         }
     }

@@ -276,7 +276,8 @@ namespace TcgMultiplayer.Game
             // gentle pace rather than once, because most of the island starts
             // deactivated and a vehicle you have never walked near has never
             // been in FsmList to watch.
-            Movers.Watch(_registry.All);
+            var rigNow = RigSource != null ? RigSource() : null;
+            Movers.Watch(_registry.All, rigNow != null ? rigNow.Root : null);
 
             // The vehicle you are driving, in world space. Separate from the
             // rigidbody stream above and sent alongside it: that one carries the
@@ -597,6 +598,7 @@ namespace TcgMultiplayer.Game
             why = null;
             if (m == null) { why = "nothing there"; return false; }
             if (!m.IsMover) { why = "that doesn't go anywhere"; return false; }
+            if (!m.Rideable) { why = "that moves, but it's not something you can sit in"; return false; }
             if (_session.State != SessionState.InLobby) { why = "you're not in a session"; return false; }
             if (m.OwnedByMe) { why = "you're driving it"; return false; }
             if (m.Owner == 0) { why = "nobody is driving it — get in and drive"; return false; }
@@ -646,7 +648,7 @@ namespace TcgMultiplayer.Game
 
             // The rule itself lives in Seating, where it can be tested. All this
             // does is turn the ruling into packets.
-            var d = Seating.Decide(m.Seats, who.m_SteamID, m.Owner, m.IsMover, m.Capacity, leave);
+            var d = Seating.Decide(m.Seats, who.m_SteamID, m.Owner, m.Rideable, m.Capacity, leave);
 
             if (!d.Ok)
             {

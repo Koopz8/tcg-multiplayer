@@ -1,6 +1,35 @@
 CHANGELOG
 =========
 
+0.10.1
+------
+Fixed
+  * The game could come back cropped and at the wrong resolution. This was the
+    mod's fault, and it was two separate mistakes in the monitor mover.
+
+    Moving the window forced the game to the target monitor's native resolution,
+    overriding whatever you'd picked in the game's own settings. Unity saves the
+    resolution, so the wrong one came back on every launch afterwards - long
+    after the move, with nothing in the log to blame.
+
+    It then put that full-size window 40 pixels in from the corner, so 40 pixels
+    of it hung off the right and bottom edges. That's the cropping.
+
+    Moving is now just a move: your resolution is left alone unless it genuinely
+    won't fit on the monitor you're moving to, and the window always lands fully
+    on screen. Fullscreen still matches the monitor, because there that is the
+    right thing to do.
+
+  * Added "Match this monitor's resolution" to the panel, under Monitor, which
+    also now shows what you're actually running at. Fixing the cause doesn't
+    unfix a setting that was already overwritten, and digging it out of the
+    registry isn't a reasonable thing to ask.
+
+  * Ride-along was offering seats in things you obviously can't sit in - a bus's
+    card reader (it moves because the bus does) and the player's own controllers
+    (they move because you do). Moving and rideable are now two different
+    questions, answered by size.
+
 0.10.0
 ------
 Added

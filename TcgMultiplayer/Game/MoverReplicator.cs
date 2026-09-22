@@ -82,7 +82,7 @@ namespace TcgMultiplayer.Game
         /// enough to just do — 72 transform reads once a second is nothing —
         /// and it means no list of vehicle names to go stale.
         /// </summary>
-        public void Watch(IEnumerable<Machine> machines)
+        public void Watch(IEnumerable<Machine> machines, Transform playerRoot)
         {
             if (Time.time < _nextWatchAt) return;
             _nextWatchAt = Time.time + 1f;
@@ -92,6 +92,12 @@ namespace TcgMultiplayer.Game
             {
                 if (m == null || m.Root == null) continue;
 
+                // Anything carried by the player moves exactly as much as the
+                // player does, which is a lot. Streaming its position to
+                // everyone would be describing our own walk in the most
+                // expensive way available.
+                if (playerRoot != null && m.Root.IsChildOf(playerRoot)) continue;
+
                 MoverTrack.Watch w;
                 _watch.TryGetValue(m.Id, out w);
                 w = MoverTrack.Note(w, m.Root.position);
@@ -99,9 +105,12 @@ namespace TcgMultiplayer.Game
 
                 if (w.IsMover && !m.IsMover)
                 {
+                    m.IsMover = true;
                     Measure(m);
-                    Plugin.Log("Mover: " + m.Label + " travels, so its position will be shared. "
-                               + "Seats " + m.Capacity + ".");
+                    Plugin.Log("Mover: " + m.Label + " travels, so its position will be shared."
+                               + (m.Rideable
+                                  ? " Seats " + m.Capacity + "."
+                                  : " Too small to ride."));
                 }
                 m.IsMover = w.IsMover;
                 if (w.IsMover) movers++;

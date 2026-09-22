@@ -46,6 +46,26 @@ namespace TcgMultiplayer.Game
             return Mathf.Clamp(seats, 2, MaxSeats);
         }
 
+        /// <summary>
+        /// Is this big enough that a person could plausibly sit in it?
+        ///
+        /// "It moves" is not the same as "you can ride it", and the first build
+        /// of this conflated them. The very first real run offered seats in a
+        /// bus's card-reader arm (it moves because the bus does) and in the
+        /// player's own CONTROLLERS object (it moves because the player does).
+        /// Both were two-seaters as far as the capacity maths was concerned,
+        /// because a thing with almost no footprint clamps to the minimum.
+        ///
+        /// A floor check fixes that without another list of names: a golf cart
+        /// is about 1.2 x 2.4 m, and nothing you can sit in is smaller than a
+        /// doormat.
+        /// </summary>
+        public static bool FitsAPerson(Vector3 extents)
+        {
+            float footprint = Mathf.Max(0f, extents.x * 2f) * Mathf.Max(0f, extents.z * 2f);
+            return footprint >= 1.5f && extents.y * 2f >= 0.8f;
+        }
+
         /// <summary>Is this SteamID sitting anywhere in here?</summary>
         public static bool Contains(IList<ulong> seats, ulong who)
         {

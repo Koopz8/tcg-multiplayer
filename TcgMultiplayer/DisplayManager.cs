@@ -94,23 +94,34 @@ namespace TcgMultiplayer
 
                 var target = _layout[index];
 
-                // Top-left of the target's work area, nudged in so the title bar
-                // lands on-screen rather than under a taskbar.
-                var pos = new Vector2Int(target.workArea.x + 40, target.workArea.y + 40);
+                // Moving the window does NOT resize the backbuffer, which is why
+                // this has to think about resolution at all: land a 2560x1440
+                // window on a 1080p monitor and the game carries on rendering at
+                // the old size, which looks like a smeared double image.
+                //
+                // But the fix for that used to be "force the monitor's native
+                // resolution and nudge the window 40px in from the corner", and
+                // that was worse than the problem — it overrode the player's own
+                // video settings permanently (Unity saves resolution) and left
+                // 40px of a full-size window hanging off two edges. The decision
+                // now lives in DisplayChoice.Place, where it is tested.
+                bool fullscreen = Screen.fullScreenMode != FullScreenMode.Windowed;
+                var plan = DisplayChoice.Place(
+                    Screen.width, Screen.height,
+                    target.workArea.x, target.workArea.y,
+                    target.workArea.width, target.workArea.height,
+                    target.width, target.height,
+                    fullscreen);
 
-                // Moving the window does NOT resize the backbuffer. Land a
-                // 2560x1440 window on a 1080p monitor and the game carries on
-                // rendering at the old size, which looks like a smeared double
-                // image of the last frame. So the move is only half the job:
-                // the resolution has to follow it.
-                _pendingMove = Screen.MoveMainWindowTo(target, pos);
+                _pendingMove = Screen.MoveMainWindowTo(target, new Vector2Int(plan.X, plan.Y));
                 _pendingMode = Screen.fullScreenMode;
-                _pendingWidth = target.width;
-                _pendingHeight = target.height;
+                _pendingWidth = plan.Width;
+                _pendingHeight = plan.Height;
                 _pendingIndex = index;
+                _pendingWhy = plan.Why;
 
                 Status = "moving to " + NameOf(index) + "...";
-                Plugin.Log("Display: " + Status);
+                Plugin.Log("Display: " + Status + " " + plan.Why);
                 return true;
             }
             catch (Exception ex)
@@ -124,6 +135,7 @@ namespace TcgMultiplayer
         private static AsyncOperation _pendingMove;
         private static FullScreenMode _pendingMode;
         private static int _pendingWidth, _pendingHeight, _pendingIndex = -1;
+        private static string _pendingWhy;
 
         /// <summary>
         /// Finish a move once the window has actually landed. Doing this on a
@@ -143,14 +155,57 @@ namespace TcgMultiplayer
                 if (Screen.width != _pendingWidth || Screen.height != _pendingHeight)
                     Screen.SetResolution(_pendingWidth, _pendingHeight, _pendingMode);
 
-                Status = "moved to " + NameOf(_pendingIndex)
-                       + " (" + _pendingWidth + "x" + _pendingHeight + ")";
+                Status = "moved to " + NameOf(_pendingIndex) + ". "
+                       + (_pendingWhy ?? "(" + _pendingWidth + "x" + _pendingHeight + ")");
                 Plugin.Log("Display: " + Status);
             }
             catch (Exception ex)
             {
                 Status = "moved, but couldn't match the resolution: " + ex.Message;
                 Plugin.Warn("Display: " + Status);
+            }
+        }
+
+        /// <summary>
+        /// Put the resolution back to this monitor's native size.
+        ///
+        /// Exists because an earlier version of MoveTo forced the resolution on
+        /// every move, and Unity SAVES resolution — so the wrong value outlived
+        /// the mod that set it and came back on every launch, with nothing in
+        /// the log to show for it. Fixing the cause doesn't unfix anyone whose
+        /// setting was already overwritten, and hunting it down in the registry
+        /// is not a reasonable thing to ask of someone.
+        /// </summary>
+        public static bool MatchMonitor()
+        {
+            try
+            {
+                Refresh();
+                int cur = Current;
+                if (cur < 0 || cur >= _layout.Count)
+                {
+                    Status = "can't tell which monitor this is, so nothing was changed.";
+                    return false;
+                }
+
+                var d = _layout[cur];
+                if (d.width <= 0 || d.height <= 0)
+                {
+                    Status = "this monitor reports no size, so nothing was changed.";
+                    return false;
+                }
+
+                Screen.SetResolution(d.width, d.height, Screen.fullScreenMode);
+                Status = "resolution set to " + d.width + "x" + d.height + " to match "
+                       + (string.IsNullOrEmpty(d.name) ? "this monitor" : d.name) + ".";
+                Plugin.Log("Display: " + Status);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Status = "couldn't set the resolution: " + ex.Message;
+                Plugin.Warn("Display: " + Status);
+                return false;
             }
         }
 
