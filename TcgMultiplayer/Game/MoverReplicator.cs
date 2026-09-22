@@ -57,7 +57,18 @@ namespace TcgMultiplayer.Game
             public readonly List<Snap> Snaps = new List<Snap>(24);
             public float LastRecv = -999f;
             public bool MadeKinematic;
-            public Rigidbody Body;
+
+            /// <summary>
+            /// EVERY rigidbody in the vehicle, not just the one on its body.
+            ///
+            /// Teleporting the body twenty times a second while its wheels are
+            /// still free-simulating leaves the wheels behind, and PhysX reacts
+            /// to being dragged by throwing them: they lift off the axles and
+            /// spin up hard enough to kick out tyre smoke. Anything attached has
+            /// to be held still too.
+            /// </summary>
+            public readonly List<Rigidbody> Bodies = new List<Rigidbody>(16);
+            public readonly List<bool> WasKinematic = new List<bool>(16);
         }
 
         private readonly Dictionary<uint, Tracked> _spectated = new Dictionary<uint, Tracked>();
@@ -284,8 +295,22 @@ namespace TcgMultiplayer.Game
             if (!t.MadeKinematic)
             {
                 t.MadeKinematic = true;
-                t.Body = m.Moving.GetComponent<Rigidbody>();
-                if (t.Body != null) t.Body.isKinematic = true;
+                t.Bodies.Clear();
+                t.WasKinematic.Clear();
+                try
+                {
+                    var all = m.Moving.GetComponentsInChildren<Rigidbody>(true);
+                    for (int i = 0; i < all.Length; i++)
+                    {
+                        if (all[i] == null) continue;
+                        t.Bodies.Add(all[i]);
+                        t.WasKinematic.Add(all[i].isKinematic);
+                        all[i].isKinematic = true;
+                    }
+                    Plugin.Log("Mover: holding " + t.Bodies.Count + " rigidbodies still on "
+                               + m.Label + " while its driver moves it.");
+                }
+                catch (Exception ex) { Plugin.Warn("Could not freeze " + m.Label + ": " + ex.Message); }
             }
 
             t.LastRecv = Time.time;
@@ -372,7 +397,18 @@ namespace TcgMultiplayer.Game
         {
             Tracked t;
             if (!_spectated.TryGetValue(machineId, out t)) return;
-            if (t.Body != null) t.Body.isKinematic = false;
+
+            // Put every one back the way it was, not simply "not kinematic" —
+            // some of them were kinematic to begin with and turning those loose
+            // drops parts of the vehicle on the floor.
+            for (int i = 0; i < t.Bodies.Count; i++)
+            {
+                if (t.Bodies[i] == null) continue;
+                try { t.Bodies[i].isKinematic = i < t.WasKinematic.Count && t.WasKinematic[i]; }
+                catch { }
+            }
+            t.Bodies.Clear();
+            t.WasKinematic.Clear();
             _spectated.Remove(machineId);
         }
 

@@ -210,6 +210,22 @@ namespace TcgMultiplayer.Ui
             var dx = Health.Now(_s, _mc, _av);
             GUILayout.Label(dx.Headline, dx.IsBad ? _alert : _head);
             if (!string.IsNullOrEmpty(dx.NextStep)) GUILayout.Label(dx.NextStep, _dim);
+
+            // "I can't move" is the single most confusing thing this mod can do
+            // to someone, because there are three unrelated reasons for it and
+            // none of them announce themselves. Say which one it is.
+            var held = WhyCantIMove();
+            if (held != null)
+            {
+                GUILayout.Label("You can't move: " + held, _alert);
+                if (GUILayout.Button("Unstick me (same as F11)", _btn, GUILayout.Height(22)))
+                {
+                    _mc.ReleaseEverything();
+                    InputLock.Set(false);
+                    InputLock.Tick();
+                }
+            }
+
             GUILayout.Space(6);
 
             if (!_s.Ready) return;
@@ -723,6 +739,27 @@ namespace TcgMultiplayer.Ui
             if (GUILayout.Button(here ? "> " + label : label, _btn, GUILayout.Height(22)) && !here)
                 DisplayManager.SetMode(mode);
             GUI.enabled = true;
+        }
+
+        /// <summary>
+        /// The three reasons the mod can be holding you still, in the order
+        /// they'd surprise you. Null when nothing of ours is in the way — which
+        /// is itself useful to know, because then it isn't us.
+        /// </summary>
+        private string WhyCantIMove()
+        {
+            if (_mc.Ride.Active)
+            {
+                Machine m;
+                var what = _mc.TryGetMachine(_mc.Ride.Riding, out m) ? m.Label : "something";
+                return "you're riding in " + what + ". F7 gets you out.";
+            }
+
+            if (InputLock.Locked)
+                return "the panel has your keyboard while the caret is in a text box. "
+                     + "Click away from the chat box, or press " + Plugin.ToggleKeyName + ".";
+
+            return null;
         }
 
         private void DrawChat()
