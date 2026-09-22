@@ -547,43 +547,46 @@ namespace TcgRig
 
         private static Check TakingYourCardBackIsNotLeavingTheMachine()
         {
-            return Run("taking your card back is not leaving the machine", c =>
+            return Run("no state name can end a lease that is still being played", c =>
             {
-                // The round in the trace: claimed at 09:59:42, handed back at
-                // 09:59:44, still being played at 10:01. Two seconds is the
-                // card going in and coming straight back out again - and with
-                // the machine ownerless, not one coin position and not one
-                // event was sent to the other window for the rest of it.
+                // Twice now a name in the release list has ended a round two
+                // seconds after it started, and both times the whole round went
+                // unwatched because a machine nobody owns sends nothing:
+                //
+                //     10:08:19.99  Machine Treasure 04 is yours.
+                //     10:08:22.17  Machine free: Treasure 04     <- still playing
+                //
+                // These names describe the cabinet, not the player. A machine
+                // handing control back so you can play it is indistinguishable,
+                // by name, from a machine you have walked away from.
                 Assert.True(Occupancy.IsClaim("Card Inserted"), "the card going in starts the lease");
-                foreach (var s in new[] { "Card Removed", "Card Removed Inside", "Card Removed Inside 2" })
+                Assert.True(Occupancy.IsClaim("Turn On MECH"), "so does powering it up");
+
+                // Every one of these once had authority over the lease. None do.
+                foreach (var s in new[] { "Card Removed", "Card Removed Inside", "Card Removed Inside 2",
+                                          "Turn Off MECH", "Button Exit Machine",
+                                          "Send Explore Mode", "Send Explore Mode Event",
+                                          "PLAYER HIT EXIT", "Off of Ride and Done", "Off of Bus and Done" })
                 {
-                    Assert.True(!Occupancy.IsRelease(s), "'" + s + "' does not end it");
-                    Assert.True(!Occupancy.IsClaim(s), "and does not start it either");
+                    Assert.True(Occupancy.LooksLikeLeaving(s), "'" + s + "' is still worth noting");
+                    Assert.True(!Occupancy.IsClaim(s), "but '" + s + "' does not start a lease");
                 }
 
-                // The ones that really do mean done.
-                foreach (var s in new[] { "Button Exit Machine", "Send Explore Mode",
-                                          "PLAYER HIT EXIT", "Turn Off MECH",
-                                          "Off of Ride and Done", "Off of Bus and Done" })
-                    Assert.True(Occupancy.IsRelease(s), "'" + s + "' ends the lease");
-
-                // Anything we have never heard of changes nothing, which is the
-                // safe direction: a machine stays yours until something says
-                // otherwise, and walking off says otherwise.
                 foreach (var s in new[] { "Idle", "Attract Mode", "", "Machine Is Frozen", "Payout" })
                 {
                     Assert.True(!Occupancy.IsClaim(s), "'" + s + "' is not a claim");
-                    Assert.True(!Occupancy.IsRelease(s), "'" + s + "' is not a release");
+                    Assert.True(!Occupancy.LooksLikeLeaving(s), "'" + s + "' is not a departure either");
                 }
-                Assert.True(!Occupancy.IsClaim(null) && !Occupancy.IsRelease(null), "and neither is nothing");
+                Assert.True(!Occupancy.IsClaim(null) && !Occupancy.LooksLikeLeaving(null),
+                            "and neither is nothing");
 
-                // The backstop, for the exits across 72 controllers we have not named.
+                // What actually ends it, which no rename can break.
                 Assert.True(!Occupancy.WalkedAway(0f), "standing at it is not walking away");
                 Assert.True(!Occupancy.WalkedAway(Occupancy.WalkAwayDistance), "nor is leaning back");
                 Assert.True(Occupancy.WalkedAway(Occupancy.WalkAwayDistance + 0.1f), "crossing the room is");
                 Assert.True(Occupancy.WalkAwayGrace > 0f, "and it has to last, not just happen once");
 
-                c.Detail = "the lease survives the round instead of ending two seconds in";
+                c.Detail = "the lease ends when you leave, not when the cabinet says something";
             });
         }
 

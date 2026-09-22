@@ -23,10 +23,14 @@ namespace TcgMultiplayer.Game
     /// actually playing it.
     ///
     /// Addressing is by ordinal in a deterministic traversal, not by path: coins
-    /// are runtime clones and share a name, so paths cannot tell them apart. That
-    /// only holds while both sides agree on how many bodies exist — which the
-    /// event mirror is what keeps true — so a count mismatch is detected, skipped
-    /// and reported rather than silently scrambling the machine.
+    /// are runtime clones and share a name, so paths cannot tell them apart.
+    ///
+    /// The two sides will not hold the same number of coins — they are different
+    /// save files that have been played different amounts — and the first version
+    /// treated that as corruption and dropped the frame. It dropped every frame
+    /// ever sent. The counts are not going to converge, so the overlap is driven
+    /// and the difference is reported: coins are interchangeable, and a tray that
+    /// moves is the entire point.
     /// </summary>
     internal sealed class PhysicsReplicator
     {
@@ -48,6 +52,9 @@ namespace TcgMultiplayer.Game
         private readonly Dictionary<uint, List<Target>> _targets = new Dictionary<uint, List<Target>>();
         private readonly Dictionary<uint, List<Rigidbody>> _spectated = new Dictionary<uint, List<Rigidbody>>();
         private readonly HashSet<uint> _madeKinematic = new HashSet<uint>();
+
+        /// <summary>Machines we have already said the body counts differ on. Once each is plenty.</summary>
+        private readonly HashSet<uint> _mismatchLogged = new HashSet<uint>();
 
         public int BodiesSent, BodiesApplied, CountMismatches;
         public float LastPacketBytes;
@@ -154,23 +161,44 @@ namespace TcgMultiplayer.Game
             }
             Gather(m.Root, _scratch);
 
+            // The two sides rarely agree about how many things are inside a
+            // machine, and the original answer to that was to throw the whole
+            // frame away. On the panel that read:
+            //
+            //     physics: 0 bodies sent, 0 applied · 38 count mismatches
+            //
+            // Nothing had ever been applied. The assumption was that the event
+            // mirror keeps the counts equal; it doesn't, and it can't. Two
+            // copies of the game have been played different amounts, so their
+            // pushers hold different numbers of coins — and the mismatch is not
+            // a transient a retry fixes, it is the steady state.
+            //
+            // So drive what both sides have. A pusher's coins are
+            // interchangeable: nobody can tell which local coin took which
+            // remote coin's place, only whether the tray looks right. Where the
+            // watcher has spare coins the stream doesn't reach, those keep
+            // simulating locally, which looks like coins rather than like a
+            // bug.
+            int n = _scratch.Count < count ? _scratch.Count : count;
             if (_scratch.Count != count)
             {
-                // The two sides disagree about how many things exist inside the
-                // machine — usually a spawn the event mirror hasn't delivered yet.
-                // Applying anyway would put coin 40's transform on coin 39.
                 CountMismatches++;
-                return;
+                if (_mismatchLogged.Add(m.Id))
+                    Plugin.Log("Physics: " + m.Label + " has " + _scratch.Count
+                               + " moving parts here and " + count + " on the player's screen. "
+                               + "Driving the " + n + " they share.");
             }
 
             bodies.Clear();
             bodies.AddRange(_scratch);
 
             // Spectated bodies must stop simulating, or local physics fights the
-            // incoming stream and everything jitters.
-            if (_madeKinematic.Add(m.Id))
-                for (int i = 0; i < bodies.Count; i++)
-                    if (bodies[i] != null) bodies[i].isKinematic = true;
+            // incoming stream and everything jitters. Only the ones we actually
+            // drive, though: freezing a coin nothing is sending us a pose for
+            // leaves it hanging in the air for the rest of the round.
+            for (int i = 0; i < n; i++)
+                if (bodies[i] != null && !bodies[i].isKinematic) bodies[i].isKinematic = true;
+            _madeKinematic.Add(m.Id);
 
             List<Target> targets;
             if (!_targets.TryGetValue(m.Id, out targets))
@@ -178,7 +206,7 @@ namespace TcgMultiplayer.Game
                 targets = new List<Target>(count);
                 _targets[m.Id] = targets;
             }
-            while (targets.Count < count) targets.Add(new Target());
+            while (targets.Count < n) targets.Add(new Target());
 
             var origin = m.Root.position;
             var rot = m.Root.rotation;
@@ -186,6 +214,8 @@ namespace TcgMultiplayer.Game
 
             for (int i = 0; i < count; i++)
             {
+                // Every body's 14 bytes still has to be read to stay in step
+                // with the buffer, even the ones we have nowhere to put.
                 var lp = new Vector3(
                     Dequant(ReadI16(data, ref o), PosScale),
                     Dequant(ReadI16(data, ref o), PosScale),
@@ -196,8 +226,10 @@ namespace TcgMultiplayer.Game
                     Dequant(ReadI16(data, ref o), RotScale),
                     Dequant(ReadI16(data, ref o), RotScale));
 
+                if (i >= n) continue;
+
                 var t = targets[i];
-                var rb = i < bodies.Count ? bodies[i] : null;
+                var rb = bodies[i];
                 t.FromPos = rb != null ? rb.transform.position : origin;
                 t.FromRot = rb != null ? rb.transform.rotation : rot;
                 t.Pos = origin + rot * lp;
@@ -205,7 +237,7 @@ namespace TcgMultiplayer.Game
                 t.At = now;
             }
 
-            BodiesApplied += count;
+            BodiesApplied += n;
         }
 
         /// <summary>Eases each body toward its last received pose; called every frame.</summary>

@@ -163,15 +163,42 @@ namespace TcgMultiplayer.Game
                 {
                     m.LocallyOccupied = true;
                     live._awaySince = -1f;
+                    live._watchStates.Add(m.Id);
                     live.RequestClaim(m);
                 }
-                else if (Occupancy.IsRelease(state))
-                {
-                    m.LocallyOccupied = false;
-                    live.ReleaseIfMine(m);
-                }
+
+                // Ending the lease on a state name has now been wrong twice, in
+                // both directions, and each time it silently switched spectating
+                // off for the whole round. So it no longer ends on one at all —
+                // see TickWalkedAway. What this does instead is write down what
+                // the controller actually did, so the next question about it can
+                // be answered from a log rather than from a list of names that
+                // sound right.
+                live.NoteControllerState(m, state);
             }
             catch { }
+        }
+
+        // Machines whose controller we are transcribing, and how much of each
+        // we have written. Bounded: this is a diagnostic, not a feature, and an
+        // unbounded one would fill the log with a coin pusher's idle loop.
+        private readonly HashSet<uint> _watchStates = new HashSet<uint>();
+        private readonly Dictionary<uint, int> _stateLines = new Dictionary<uint, int>();
+        private const int MaxStateLinesPerMachine = 90;
+
+        private void NoteControllerState(Machine m, string state)
+        {
+            if (m == null || !_watchStates.Contains(m.Id)) return;
+
+            int n;
+            _stateLines.TryGetValue(m.Id, out n);
+            if (n >= MaxStateLinesPerMachine) return;
+            _stateLines[m.Id] = n + 1;
+
+            Plugin.Log("State: " + m.Label + " -> \"" + state + "\""
+                       + (m.OwnedByMe ? " [ours]" : m.Owner != 0 ? " [theirs]" : " [free]")
+                       + (Occupancy.LooksLikeLeaving(state) ? "  (sounds like leaving; ignored)" : "")
+                       + (n + 1 == MaxStateLinesPerMachine ? "  (that's enough of these)" : ""));
         }
 
         public void OnSceneChanged()
@@ -365,6 +392,22 @@ namespace TcgMultiplayer.Game
                 Plugin.Log("Machine " + m.Label + " is in use by "
                            + (m.OwnerName ?? "someone else") + " — not claiming.");
                 return;
+            }
+
+            // One machine at a time. With nothing but distance ending a lease,
+            // walking from one cabinet to the next one beside it would otherwise
+            // leave you holding both — and the first locked to you for everyone
+            // else until you left the building.
+            if (MyMachine != 0 && MyMachine != m.Id)
+            {
+                Machine held;
+                if (_registry.TryGet(MyMachine, out held) && held.OwnedByMe
+                    && RidingMachine != held.Id && Ride.Riding != held.Id)
+                {
+                    held.LocallyOccupied = false;
+                    Plugin.Log("Giving " + held.Label + " back — you've started on " + m.Label + ".");
+                    ReleaseIfMine(held);
+                }
             }
 
             if (_session.State != SessionState.InLobby)
