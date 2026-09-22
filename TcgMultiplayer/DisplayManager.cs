@@ -93,25 +93,23 @@ namespace TcgMultiplayer
                 }
 
                 var target = _layout[index];
-                var wasMode = Screen.fullScreenMode;
-                bool wasFullscreen = wasMode != FullScreenMode.Windowed;
-
-                if (wasFullscreen) Screen.fullScreenMode = FullScreenMode.Windowed;
 
                 // Top-left of the target's work area, nudged in so the title bar
-                // is definitely on-screen rather than under a taskbar.
+                // lands on-screen rather than under a taskbar.
                 var pos = new Vector2Int(target.workArea.x + 40, target.workArea.y + 40);
-                Screen.MoveMainWindowTo(target, pos);
 
-                if (wasFullscreen)
-                {
-                    // Give the move a frame to land before reclaiming fullscreen,
-                    // otherwise it can snap back to where it started.
-                    _restoreMode = wasMode;
-                    _restoreAt = Time.realtimeSinceStartup + 0.5f;
-                }
+                // Moving the window does NOT resize the backbuffer. Land a
+                // 2560x1440 window on a 1080p monitor and the game carries on
+                // rendering at the old size, which looks like a smeared double
+                // image of the last frame. So the move is only half the job:
+                // the resolution has to follow it.
+                _pendingMove = Screen.MoveMainWindowTo(target, pos);
+                _pendingMode = Screen.fullScreenMode;
+                _pendingWidth = target.width;
+                _pendingHeight = target.height;
+                _pendingIndex = index;
 
-                Status = "moved to " + NameOf(index);
+                Status = "moving to " + NameOf(index) + "...";
                 Plugin.Log("Display: " + Status);
                 return true;
             }
@@ -123,8 +121,38 @@ namespace TcgMultiplayer
             }
         }
 
-        private static FullScreenMode _restoreMode;
-        private static float _restoreAt = -1f;
+        private static AsyncOperation _pendingMove;
+        private static FullScreenMode _pendingMode;
+        private static int _pendingWidth, _pendingHeight, _pendingIndex = -1;
+
+        /// <summary>
+        /// Finish a move once the window has actually landed. Doing this on a
+        /// timer instead was what left the display smeared: the resolution was
+        /// being set while the window was still in flight.
+        /// </summary>
+        private static void FinishMoveIfDone()
+        {
+            if (_pendingMove == null) return;
+            if (!_pendingMove.isDone) return;
+
+            var op = _pendingMove;
+            _pendingMove = null;
+
+            try
+            {
+                if (Screen.width != _pendingWidth || Screen.height != _pendingHeight)
+                    Screen.SetResolution(_pendingWidth, _pendingHeight, _pendingMode);
+
+                Status = "moved to " + NameOf(_pendingIndex)
+                       + " (" + _pendingWidth + "x" + _pendingHeight + ")";
+                Plugin.Log("Display: " + Status);
+            }
+            catch (Exception ex)
+            {
+                Status = "moved, but couldn't match the resolution: " + ex.Message;
+                Plugin.Warn("Display: " + Status);
+            }
+        }
 
         /// <summary>Cycle to the next monitor. Usable without being able to see the game.</summary>
         public static bool MoveToNext()
@@ -170,11 +198,7 @@ namespace TcgMultiplayer
 
         public static void Tick(string savedName, int savedIndex)
         {
-            if (_restoreAt > 0 && Time.realtimeSinceStartup >= _restoreAt)
-            {
-                _restoreAt = -1f;
-                try { Screen.fullScreenMode = _restoreMode; } catch { }
-            }
+            FinishMoveIfDone();
 
             if (_appliedOnce || _applyAt < 0 || Time.realtimeSinceStartup < _applyAt) return;
             _appliedOnce = true;

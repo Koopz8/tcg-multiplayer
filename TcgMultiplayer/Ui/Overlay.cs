@@ -19,8 +19,13 @@ namespace TcgMultiplayer.Ui
         private readonly AvatarDirector _av;
         private readonly MachineDirector _mc;
         private readonly WorldState _world;
-        private Rect _rect = new Rect(24, 24, 460, 430);
+        private Rect _rect = new Rect(24, 24, 470, 620);
         private Vector2 _scroll;
+        // The body scrolls. Without this the panel simply clipped at 430px and
+        // everything past "Shared island" — self-test, performance, monitor,
+        // health — was unreachable, which is why the monitor controls looked
+        // like they had not been added at all.
+        private Vector2 _bodyScroll;
         private string _chatDraft = "";
         private string _joinDraft = "";
         private bool _showJoinField;
@@ -112,6 +117,8 @@ namespace TcgMultiplayer.Ui
                 GUILayout.Space(6);
             }
 
+            _bodyScroll = GUILayout.BeginScrollView(_bodyScroll);
+
             GUILayout.Label("You: " + _s.SelfName + "   (" + _s.SelfId.m_SteamID + ")", _dim);
             GUILayout.Label("Session: " + StateLine(), _head);
             GUILayout.Space(4);
@@ -144,6 +151,44 @@ namespace TcgMultiplayer.Ui
                 }
                 GUILayout.EndHorizontal();
                 GUILayout.Label("Paste a lobby ID, or just use Host + Invite friend.", _dim);
+            }
+
+            // ---- monitor ----------------------------------------------------
+            GUILayout.Space(6);
+            GUILayout.Label("Monitor", _head);
+            if (!DisplayManager.Supported)
+            {
+                if (GUILayout.Button("Look for monitors", GUILayout.Height(20)))
+                    DisplayManager.Refresh();
+                GUILayout.Label(DisplayManager.Status, _dim);
+            }
+            else
+            {
+                int here = DisplayManager.Current;
+                for (int i = 0; i < DisplayManager.Count; i++)
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label((i == here ? "> " : "   ") + DisplayManager.NameOf(i),
+                                    i == here ? _mono : _dim);
+                    GUILayout.FlexibleSpace();
+                    GUI.enabled = i != here;
+                    if (GUILayout.Button("Move here", GUILayout.Width(88), GUILayout.Height(20)))
+                        DisplayManager.MoveTo(i);
+                    GUI.enabled = true;
+                    GUILayout.EndHorizontal();
+                }
+
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("Remember this one", GUILayout.Height(22)))
+                    Plugin.RememberMonitor();
+                if (GUILayout.Button("Forget", GUILayout.Width(70), GUILayout.Height(22)))
+                    Plugin.ForgetMonitor();
+                GUILayout.EndHorizontal();
+
+                GUILayout.Label(DisplayManager.Status, _dim);
+                GUILayout.Label("The game has no monitor setting of its own, so this is the mod's. "
+                              + Plugin.NextMonitorKeyName + " cycles monitors even if you can't see "
+                              + "the game to open this panel.", _dim);
             }
 
             // ---- peers ----------------------------------------------------
@@ -338,44 +383,6 @@ namespace TcgMultiplayer.Ui
                 GUILayout.Label("Worst frame over 100 ms — that's a visible hitch. If the breakdown "
                               + "above is near zero, it isn't this mod.", _dim);
 
-            // ---- monitor ----------------------------------------------------
-            GUILayout.Space(6);
-            GUILayout.Label("Monitor", _head);
-            if (!DisplayManager.Supported)
-            {
-                if (GUILayout.Button("Look for monitors", GUILayout.Height(20)))
-                    DisplayManager.Refresh();
-                GUILayout.Label(DisplayManager.Status, _dim);
-            }
-            else
-            {
-                int here = DisplayManager.Current;
-                for (int i = 0; i < DisplayManager.Count; i++)
-                {
-                    GUILayout.BeginHorizontal();
-                    GUILayout.Label((i == here ? "> " : "   ") + DisplayManager.NameOf(i),
-                                    i == here ? _mono : _dim);
-                    GUILayout.FlexibleSpace();
-                    GUI.enabled = i != here;
-                    if (GUILayout.Button("Move here", GUILayout.Width(88), GUILayout.Height(20)))
-                        DisplayManager.MoveTo(i);
-                    GUI.enabled = true;
-                    GUILayout.EndHorizontal();
-                }
-
-                GUILayout.BeginHorizontal();
-                if (GUILayout.Button("Remember this one", GUILayout.Height(22)))
-                    Plugin.RememberMonitor();
-                if (GUILayout.Button("Forget", GUILayout.Width(70), GUILayout.Height(22)))
-                    Plugin.ForgetMonitor();
-                GUILayout.EndHorizontal();
-
-                GUILayout.Label(DisplayManager.Status, _dim);
-                GUILayout.Label("The game has no monitor setting of its own, so this is the mod's. "
-                              + Plugin.NextMonitorKeyName + " cycles monitors even if you can't see "
-                              + "the game to open this panel.", _dim);
-            }
-
             // ---- health ---------------------------------------------------
             GUILayout.Space(6);
             GUILayout.Label("Health", _head);
@@ -467,6 +474,7 @@ namespace TcgMultiplayer.Ui
             GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status
                           + (TypingInABox ? " — typing, so the game isn't listening" : "") + ".", _dim);
             DrawChat();
+            GUILayout.EndScrollView();
             GUI.DragWindow(new Rect(0, 0, 10000, 20));
         }
 
