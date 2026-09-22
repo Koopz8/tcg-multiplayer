@@ -1104,8 +1104,8 @@ namespace TcgMultiplayer.Game
             float bestSq = maxDistance * maxDistance;
             foreach (var m in _registry.All)
             {
-                if (m.Root == null) continue;
-                var d = (m.Root.position - from).sqrMagnitude;
+                if (m.Moving == null) continue;
+                var d = (m.Moving.position - from).sqrMagnitude;
                 if (d < bestSq) { bestSq = d; best = m; }
             }
             return best;

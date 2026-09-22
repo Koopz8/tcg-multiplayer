@@ -156,8 +156,35 @@ namespace TcgMultiplayer.Game
             _byRoot.Clear();
         }
 
+        /// <summary>
+        /// What we learned about a machine that a rescan must not throw away.
+        ///
+        /// Rebuild replaces every Machine object, and the registry rebuilds
+        /// whenever a district comes online — which is constantly while driving
+        /// around. Without this, the body we worked out (and the fact that the
+        /// thing travels at all) is lost every few seconds and has to be
+        /// rediscovered, and in the gap the vehicle's pose goes to its control
+        /// panel again.
+        /// </summary>
+        private struct Learned
+        {
+            public Transform Body;
+            public int BodyUp;
+            public bool IsMover;
+        }
+
+        private readonly Dictionary<uint, Learned> _learned = new Dictionary<uint, Learned>();
+
         public int Rebuild()
         {
+            // Remember before the old objects go.
+            foreach (var kv in _byId)
+            {
+                var m = kv.Value;
+                if (m.Body == null && !m.IsMover) continue;
+                _learned[kv.Key] = new Learned { Body = m.Body, BodyUp = m.BodyUp, IsMover = m.IsMover };
+            }
+
             Clear();
 
             // Reused across rebuilds rather than reallocated. In the arcade this
@@ -196,6 +223,18 @@ namespace TcgMultiplayer.Game
                     Controller = fsm,
                     SupportsFreeze = HasFrozenState(fsm),
                 };
+                // Put back what we already knew about this one.
+                Learned known;
+                if (_learned.TryGetValue(id, out known))
+                {
+                    machine.IsMover = known.IsMover;
+                    if (known.Body != null)
+                    {
+                        machine.Body = known.Body;
+                        machine.BodyUp = known.BodyUp;
+                    }
+                }
+
                 _byId[id] = machine;
                 _byRoot[root] = machine;
             }

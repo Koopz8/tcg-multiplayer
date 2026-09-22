@@ -112,8 +112,13 @@ namespace TcgMultiplayer.Game
                                   ? " Seats " + m.Capacity + "."
                                   : " Too small to ride."));
                 }
-                m.IsMover = w.IsMover;
-                if (w.IsMover) movers++;
+                // Only ever set it, never clear it. Clearing is what produced
+                // "Mover: CONTROLLERS travels (its driver said so)" once a
+                // second forever: a watcher's own copy of a vehicle never moves
+                // under its own power, so its local watch says "not a mover"
+                // and stamped that over what the driver had just told us.
+                if (w.IsMover) { m.IsMover = true; movers++; }
+                else if (m.IsMover) movers++;
             }
             Movers = movers;
         }
@@ -311,13 +316,19 @@ namespace TcgMultiplayer.Game
                 if (MoverTrack.IsStale(now - t.LastRecv)) { _scratchIds.Add(kv.Key); continue; }
 
                 var m = lookup(kv.Key);
-                if (m == null || m.Root == null) { _scratchIds.Add(kv.Key); continue; }
+                if (m == null || m.Moving == null) { _scratchIds.Add(kv.Key); continue; }
                 if (t.Snaps.Count == 0) continue;
 
                 Vector3 pos; Quaternion rot;
                 Resolve(t, now, out pos, out rot);
-                m.Root.position = pos;
-                m.Root.rotation = rot;
+
+                // Moving, NOT Root. This line is why the cart never moved on the
+                // watching screen even after both sides had correctly worked out
+                // that GOLFCART_Vehicle is the thing that travels: the answer was
+                // right and then thrown away here, and the 5cm control panel got
+                // the pose instead.
+                m.Moving.position = pos;
+                m.Moving.rotation = rot;
             }
 
             for (int i = 0; i < _scratchIds.Count; i++) Release(_scratchIds[i]);
