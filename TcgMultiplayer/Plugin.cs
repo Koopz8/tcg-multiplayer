@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.11.1";
+        public const string Version = "0.11.2";
 
         /// <summary>
         /// When this DLL was written, read off the file itself. Shown in the

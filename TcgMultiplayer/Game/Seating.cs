@@ -264,6 +264,37 @@ namespace TcgMultiplayer.Game
                 driverLocal.z - row * rowGap);
         }
 
+        /// <summary>
+        /// How far outside the vehicle to stand someone down, beyond its own
+        /// half-width. Roughly a body's width, so the character controller is
+        /// not left intersecting the bodywork it was just sitting inside.
+        /// </summary>
+        public const float ExitClearance = 1.1f;
+
+        /// <summary>
+        /// Where to put someone when they get out, in the vehicle's own space.
+        ///
+        /// Letting go of a passenger where they were sitting leaves them inside
+        /// the cart's colliders. A kinematic body does not push anything out of
+        /// itself, so the player simply cannot walk: stuck while the cart is
+        /// parked around them, free the moment it drives off, stuck again when
+        /// it stops. Every report of that was this, and it kept being blamed on
+        /// whatever else had changed that day.
+        ///
+        /// So step out sideways, clear of the widest part, on the side they
+        /// were sitting — passengers do not climb over the driver — and level
+        /// with the vehicle's base rather than its seats.
+        /// </summary>
+        public static Vector3 ExitOffset(int seat, Vector3 extents)
+        {
+            if (seat < 0) seat = 0;
+
+            float side = Mathf.Abs(extents.x) + ExitClearance;
+            bool left = (seat % 2) == 0;          // matches which side Offset seats them
+
+            return new Vector3(left ? -side : side, 0f, 0f);
+        }
+
         public static Vector3 Offset(int seat, Vector3 extents)
         {
             if (seat < 0) seat = 0;

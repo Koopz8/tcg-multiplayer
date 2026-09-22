@@ -46,6 +46,7 @@ namespace TcgRig
             RidingIsDetectedByMovingTogether,
             StandingNextToAParkedCartIsNotRidingIt,
             AStandingWatcherIsNotRidingACartThatCreepsPast,
+            GettingOutPutsYouOutsideTheVehicle,
             ConfidenceFallsFasterThanItRises,
 
             // --- over the wire
@@ -491,6 +492,55 @@ namespace TcgRig
 
                 c.Detail = "swept " + ((0.4f - RideDetect.MinMotion) / 0.005f).ToString("0")
                            + " speeds, highest confidence reached " + worst;
+            });
+        }
+
+        private static Check GettingOutPutsYouOutsideTheVehicle()
+        {
+            return Run("getting out puts you beside the vehicle, not inside it", c =>
+            {
+                // Let go of a passenger where they were sitting and they are
+                // left standing inside the bodywork. A kinematic vehicle does
+                // not push anything out of itself, so they cannot walk until it
+                // drives away from around them - reported three separate times
+                // as three different bugs.
+                var shapes = new[]
+                {
+                    new Vector3(0.85f, 1.03f, 1.28f),   // the golf cart, measured
+                    new Vector3(0.4f, 0.6f, 0.9f),      // something small
+                    new Vector3(2.4f, 1.6f, 5.5f),      // the bus
+                };
+
+                int checkedSeats = 0;
+                foreach (var extents in shapes)
+                {
+                    for (int seat = 0; seat < Seating.MaxSeats; seat++)
+                    {
+                        var exit = Seating.ExitOffset(seat, extents);
+                        var sat = Seating.Offset(seat, extents);
+
+                        Assert.True(Mathf.Abs(exit.x) > Mathf.Abs(extents.x),
+                                    "seat " + seat + " gets out past the widest point");
+                        Assert.True(Mathf.Abs(exit.x) - Mathf.Abs(extents.x) >= Seating.ExitClearance - 0.001f,
+                                    "and with a body's width of clearance");
+                        Assert.True(exit.y <= sat.y + 0.001f,
+                                    "standing on the ground, not stepping off the seat upwards");
+
+                        // Out of the side they were sitting on: nobody climbs
+                        // over the driver to get out.
+                        if (seat > 0)
+                            Assert.True(Mathf.Sign(exit.x) == Mathf.Sign(sat.x),
+                                        "seat " + seat + " leaves on its own side");
+                        checkedSeats++;
+                    }
+                }
+
+                // Two people getting out at once do not land on each other.
+                var e = shapes[0];
+                Assert.True(Vector3.Distance(Seating.ExitOffset(0, e), Seating.ExitOffset(1, e)) > 1f,
+                            "the driver and the front passenger get out on opposite sides");
+
+                c.Detail = checkedSeats + " seats across " + shapes.Length + " vehicle shapes";
             });
         }
 

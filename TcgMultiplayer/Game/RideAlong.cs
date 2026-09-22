@@ -124,9 +124,26 @@ namespace TcgMultiplayer.Game
         /// went away, or because the panic key was pressed. Every one of those
         /// has to land in the same place, so there is exactly one way out.
         /// </summary>
-        public void Leave(PlayerRig rig, string why)
+        public void Leave(PlayerRig rig, string why, Machine m = null)
         {
             if (Riding == 0) return;
+
+            // Stand them down beside the vehicle BEFORE handing physics back.
+            //
+            // Releasing someone where they were sitting leaves them inside the
+            // bodywork, and a kinematic vehicle will not push them out of
+            // itself — so they cannot walk until the cart drives away from
+            // around them. That is the "stuck again after getting out" report,
+            // and it is the same thing as the older "stuck until 1 drove off".
+            if (rig != null && rig.Valid && m != null && m.Moving != null && Seat >= 0)
+            {
+                try
+                {
+                    var outside = m.Moving.TransformPoint(Seating.ExitOffset(Seat, m.Extents));
+                    rig.Root.position = outside + _meshToRoot;
+                }
+                catch (Exception ex) { Plugin.Warn("Ride: couldn't step clear of " + m.Label + ": " + ex.Message); }
+            }
 
             if (_body != null)
             {

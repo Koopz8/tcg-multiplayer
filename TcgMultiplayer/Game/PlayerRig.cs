@@ -70,6 +70,87 @@ namespace TcgMultiplayer.Game
             Root = null; Mesh = null; Cam = null;
             _controller = null; _controllerProbed = false;
             _pVelocity = _pGrounded = _pJumping = _pRunning = null;
+            _anim = null; _animProbed = false; _animParams = null;
+        }
+
+        // ------------------------------------------------- getting the arms down
+
+        /// <summary>
+        /// The animator bools that hold the card-insert reach.
+        ///
+        /// The game sets one of these on its way into a machine and clears it on
+        /// the way out. If something interrupts that round trip the arm stays
+        /// out — pointed at the machine, forever — and the only way back is to
+        /// cycle a held item, because equipping the flashlight resets the upper
+        /// body. Nobody should have to know that.
+        /// </summary>
+        private static readonly string[] CardPoseBools =
+        {
+            "Insert Card HIGH Bool", "Insert Card MID Bool", "Insert Card LOW Bool",
+        };
+
+        private Animator _anim;
+        private bool _animProbed;
+        private System.Collections.Generic.HashSet<string> _animParams;
+
+        private Animator Anim
+        {
+            get
+            {
+                if (_animProbed) return _anim;
+                _animProbed = true;
+                try
+                {
+                    if (Mesh != null)
+                    {
+                        _anim = Mesh.GetComponent<Animator>();
+                        if (_anim == null) _anim = Mesh.GetComponentInChildren<Animator>(true);
+                    }
+                    if (_anim != null)
+                    {
+                        _animParams = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+                        foreach (var p in _anim.parameters) if (p != null) _animParams.Add(p.name);
+                    }
+                }
+                catch (Exception ex) { Plugin.Warn("Could not read the player animator: " + ex.Message); }
+                return _anim;
+            }
+        }
+
+        /// <summary>Is the body still reaching for a card slot?</summary>
+        public bool HoldingCardPose
+        {
+            get
+            {
+                var a = Anim;
+                if (a == null || _animParams == null) return false;
+                try
+                {
+                    foreach (var n in CardPoseBools)
+                        if (_animParams.Contains(n) && a.GetBool(n)) return true;
+                }
+                catch { }
+                return false;
+            }
+        }
+
+        /// <summary>Put the arms down. True if anything was actually holding them up.</summary>
+        public bool ClearCardPose()
+        {
+            var a = Anim;
+            if (a == null || _animParams == null) return false;
+            bool any = false;
+            try
+            {
+                foreach (var n in CardPoseBools)
+                {
+                    if (!_animParams.Contains(n) || !a.GetBool(n)) continue;
+                    a.SetBool(n, false);
+                    any = true;
+                }
+            }
+            catch (Exception ex) { Plugin.Warn("Could not put the arms down: " + ex.Message); }
+            return any;
         }
 
         private void ProbeController()

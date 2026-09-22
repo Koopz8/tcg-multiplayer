@@ -312,6 +312,7 @@ namespace TcgMultiplayer.Game
             Physics.Render();
 
             TickRide();
+            TickStuckPose(rigNow);
 
             if (Rehearse.Playing)
             {
@@ -466,7 +467,7 @@ namespace TcgMultiplayer.Game
                 Seating.Evacuate(m.Seats, _evacuated);
                 m.MySeat = -1;
                 if (Ride.Riding == m.Id)
-                    Ride.Leave(RigSource != null ? RigSource() : null, "the driver got out");
+                    Ride.Leave(RigSource != null ? RigSource() : null, "the driver got out", m);
 
                 Plugin.Log("Machine free: " + m.Label);
             }
@@ -619,11 +620,20 @@ namespace TcgMultiplayer.Game
 
             // The panic key has to get you out of a moving vehicle too. Being
             // stuck as a passenger is exactly the kind of stuck it exists for.
+            var panicRig = RigSource != null ? RigSource() : null;
             if (Ride.Riding != 0 || Ride.Pending != 0)
             {
-                Ride.Leave(RigSource != null ? RigSource() : null, "panic key");
+                Machine pm;
+                Ride.Leave(panicRig, "panic key",
+                           _registry.TryGet(Ride.Riding, out pm) ? pm : null);
                 n++;
             }
+
+            // Being stuck in a pose is being stuck. The panic key is where
+            // people go when something looks wrong, so it should fix the thing
+            // that looks wrong.
+            if (panicRig != null && panicRig.ClearCardPose()) n++;
+            _cardPoseSince = -1f;
 
             if (n > 0) Plugin.Log("Released everything (" + n + " changes).");
             return n;
@@ -660,6 +670,21 @@ namespace TcgMultiplayer.Game
 
                 // Only the machine's owner narrates it.
                 if (!m.OwnedByMe) return;
+
+                // ...and it never narrates its own controller.
+                //
+                // Every other FSM under a machine is the machine: reels, prize
+                // arms, screens, the pusher. The controller is the PLAYER's
+                // side of it — card in, hands up, look here, you may go now —
+                // and replaying that on a watcher does it to their body, not to
+                // their copy of the cabinet. That is where the arm-out pose came
+                // from. The driver inserted a card and the watcher's own Larry
+                // reached for a slot forty feet away and stayed there.
+                //
+                // Nothing is lost. Occupancy is already carried by ownership,
+                // which is arbitrated properly rather than inferred from a
+                // replayed state change.
+                if (ReferenceEquals(owner, m.Controller)) return;
 
                 var name = fsmEvent.Name;
                 if (string.IsNullOrEmpty(name)) return;
@@ -787,6 +812,48 @@ namespace TcgMultiplayer.Game
             }
 
             SnapshotRoots();
+        }
+
+        /// <summary>
+        /// How long a card-insert pose may be held by nothing at all before we
+        /// take it as stuck. Generous: a real insert sets the bool before the
+        /// controller reaches the state that marks the machine occupied, and
+        /// putting someone's arm down mid-animation would be its own bug.
+        /// </summary>
+        private const float StuckPoseGrace = 3f;
+        private float _cardPoseSince = -1f;
+
+        /// <summary>
+        /// Notice a body left reaching for a card slot, and put it down.
+        ///
+        /// A safety net rather than a fix — the fix is upstream, in not
+        /// replaying another player's controller onto this one. But the pose
+        /// survives everything except cycling a held item, and "equip the
+        /// flashlight twice" is not a thing anyone should have to know.
+        /// </summary>
+        private void TickStuckPose(PlayerRig rig)
+        {
+            if (rig == null || !rig.Valid
+                || Ride.Active || RidingMachine != 0 || AnythingLocallyOccupied()
+                || !rig.HoldingCardPose)
+            {
+                _cardPoseSince = -1f;
+                return;
+            }
+
+            if (_cardPoseSince < 0f) { _cardPoseSince = Time.time; return; }
+            if (Time.time - _cardPoseSince < StuckPoseGrace) return;
+
+            _cardPoseSince = -1f;
+            if (rig.ClearCardPose())
+                Plugin.Log("Put your arms down — you were holding a card-insert pose "
+                           + "with nothing to put a card in.");
+        }
+
+        private bool AnythingLocallyOccupied()
+        {
+            foreach (var m in _registry.All) if (m != null && m.LocallyOccupied) return true;
+            return false;
         }
 
         private readonly Dictionary<int, Vector3> _lastAncestorPos = new Dictionary<int, Vector3>();
@@ -1016,7 +1083,9 @@ namespace TcgMultiplayer.Game
             // Get out locally first and tell the host afterwards. Waiting for a
             // round trip to stand up again is how someone ends up welded to a
             // car while their connection decides what it thinks.
-            Ride.Leave(RigSource != null ? RigSource() : null, "you got out");
+            Machine lm;
+            Ride.Leave(RigSource != null ? RigSource() : null, "you got out",
+                       _registry.TryGet(id, out lm) ? lm : null);
 
             if (_session.State != SessionState.InLobby) return;
             if (_session.IsHost) DecideSeat(_session.SelfId, id, true);
@@ -1083,7 +1152,7 @@ namespace TcgMultiplayer.Game
             }
             else if (Ride.Riding == m.Id)
             {
-                Ride.Leave(rig, "the host says you're not in it");
+                Ride.Leave(rig, "the host says you're not in it", m);
             }
 
             if (Ride.Pending == m.Id && mine <= 0)
@@ -1112,9 +1181,9 @@ namespace TcgMultiplayer.Game
 
             Machine m;
             if (!_registry.TryGet(Ride.Riding, out m)) { Ride.Leave(rig, "the vehicle is gone"); return; }
-            if (m.Owner == 0) { Ride.Leave(rig, "the driver got out"); return; }
-            if (_session.State != SessionState.InLobby) { Ride.Leave(rig, "the session ended"); return; }
-            if (!Ride.Hold(m, rig)) Ride.Leave(rig, "lost the seat");
+            if (m.Owner == 0) { Ride.Leave(rig, "the driver got out", m); return; }
+            if (_session.State != SessionState.InLobby) { Ride.Leave(rig, "the session ended", m); return; }
+            if (!Ride.Hold(m, rig)) Ride.Leave(rig, "lost the seat", m);
         }
 
         private void OnObjectState(CSteamID from, uint machineId, Session.ObjectPose pose)
@@ -1181,6 +1250,11 @@ namespace TcgMultiplayer.Game
 
             PlayMakerFSM fsm;
             if (!m.Fsms.TryGetValue(fsmId, out fsm) || fsm == null) return;
+
+            // The sending side stopped narrating controllers, but a peer on an
+            // older build hasn't, and this is the end that gets puppeted. Refuse
+            // it here too — the receiving side is the one with something to lose.
+            if (ReferenceEquals(fsm, m.Controller)) return;
 
             // Wallets are per-player. Someone else's round must not pay us, so the
             // economy is snapshotted around the replay and put back afterwards —

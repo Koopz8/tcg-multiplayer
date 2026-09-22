@@ -42,6 +42,11 @@
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>..\TcgMultiplayer\libs\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
+    <!-- PlayerRig reads the player's animator to notice a stuck card-insert
+         pose. Nothing here calls it, but the file has to compile. -->
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>..\TcgMultiplayer\libs\UnityEngine.AnimationModule.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>
