@@ -134,18 +134,9 @@ namespace TcgMultiplayer.Game
             CompatCheck.Set("PlayMaker hooks (Fsm.ProcessEvent, FsmState.OnEnter)", true, null);
         }
 
-        // States that mean "a player is now occupying this thing" / "...has left it".
-        private static readonly HashSet<string> ClaimStates = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "Card Inserted", "Turn On MECH", "Ready To Play",
-        };
-
-        private static readonly HashSet<string> ReleaseStates = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "Card Removed", "Card Removed Inside", "Card Removed Inside 2",
-            "Turn Off MECH", "Button Exit Machine", "Send Explore Mode Event", "Send Explore Mode",
-            "Off of Ride and Done", "Off of Bus and Done", "PLAYER HIT EXIT",
-        };
+        // Which states start and end a lease lives in Occupancy, where it is
+        // pure and the rig can hold it to account. It was wrong for months in a
+        // way that silently switched spectating off; it deserves a test.
 
         private static void OnStateEnter(FsmState __instance)
         {
@@ -168,12 +159,13 @@ namespace TcgMultiplayer.Game
                 if (m == null) return;
 
                 var state = __instance.Name;
-                if (ClaimStates.Contains(state))
+                if (Occupancy.IsClaim(state))
                 {
                     m.LocallyOccupied = true;
+                    live._awaySince = -1f;
                     live.RequestClaim(m);
                 }
-                else if (ReleaseStates.Contains(state))
+                else if (Occupancy.IsRelease(state))
                 {
                     m.LocallyOccupied = false;
                     live.ReleaseIfMine(m);
@@ -313,6 +305,7 @@ namespace TcgMultiplayer.Game
 
             TickRide();
             TickStuckPose(rigNow);
+            TickWalkedAway(rigNow);
 
             if (Rehearse.Playing)
             {
@@ -848,6 +841,56 @@ namespace TcgMultiplayer.Game
             if (rig.ClearCardPose())
                 Plugin.Log("Put your arms down — you were holding a card-insert pose "
                            + "with nothing to put a card in.");
+        }
+
+        private float _awaySince = -1f;
+
+        /// <summary>
+        /// Give back a machine you have plainly walked off from.
+        ///
+        /// The lease now ends only on states that mean leaving, which is right
+        /// but relies on us having named them all — across 72 controllers, we
+        /// will not have. This is the backstop that needs no names: whatever
+        /// the graph did or failed to do, someone twelve metres away is not
+        /// playing it, and a machine nobody is playing must not stay locked to
+        /// them for the rest of the session.
+        /// </summary>
+        private void TickWalkedAway(PlayerRig rig)
+        {
+            if (MyMachine == 0 || rig == null || !rig.Valid || rig.Mesh == null)
+            {
+                _awaySince = -1f;
+                return;
+            }
+
+            Machine m;
+            if (!_registry.TryGet(MyMachine, out m) || !m.OwnedByMe || m.Moving == null)
+            {
+                _awaySince = -1f;
+                return;
+            }
+
+            // You are not away from the thing that is carrying you, however far
+            // it has taken you from where you got in.
+            if (RidingMachine == m.Id || Ride.Riding == m.Id)
+            {
+                _awaySince = -1f;
+                return;
+            }
+
+            if (!Occupancy.WalkedAway(Vector3.Distance(rig.Mesh.position, m.Moving.position)))
+            {
+                _awaySince = -1f;
+                return;
+            }
+
+            if (_awaySince < 0f) { _awaySince = Time.time; return; }
+            if (Time.time - _awaySince < Occupancy.WalkAwayGrace) return;
+
+            _awaySince = -1f;
+            m.LocallyOccupied = false;
+            Plugin.Log("Giving " + m.Label + " back — you've walked away from it.");
+            ReleaseIfMine(m);
         }
 
         private bool AnythingLocallyOccupied()

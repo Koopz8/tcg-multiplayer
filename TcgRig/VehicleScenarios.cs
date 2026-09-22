@@ -47,6 +47,7 @@ namespace TcgRig
             StandingNextToAParkedCartIsNotRidingIt,
             AStandingWatcherIsNotRidingACartThatCreepsPast,
             GettingOutPutsYouOutsideTheVehicle,
+            TakingYourCardBackIsNotLeavingTheMachine,
             ConfidenceFallsFasterThanItRises,
 
             // --- over the wire
@@ -541,6 +542,48 @@ namespace TcgRig
                             "the driver and the front passenger get out on opposite sides");
 
                 c.Detail = checkedSeats + " seats across " + shapes.Length + " vehicle shapes";
+            });
+        }
+
+        private static Check TakingYourCardBackIsNotLeavingTheMachine()
+        {
+            return Run("taking your card back is not leaving the machine", c =>
+            {
+                // The round in the trace: claimed at 09:59:42, handed back at
+                // 09:59:44, still being played at 10:01. Two seconds is the
+                // card going in and coming straight back out again - and with
+                // the machine ownerless, not one coin position and not one
+                // event was sent to the other window for the rest of it.
+                Assert.True(Occupancy.IsClaim("Card Inserted"), "the card going in starts the lease");
+                foreach (var s in new[] { "Card Removed", "Card Removed Inside", "Card Removed Inside 2" })
+                {
+                    Assert.True(!Occupancy.IsRelease(s), "'" + s + "' does not end it");
+                    Assert.True(!Occupancy.IsClaim(s), "and does not start it either");
+                }
+
+                // The ones that really do mean done.
+                foreach (var s in new[] { "Button Exit Machine", "Send Explore Mode",
+                                          "PLAYER HIT EXIT", "Turn Off MECH",
+                                          "Off of Ride and Done", "Off of Bus and Done" })
+                    Assert.True(Occupancy.IsRelease(s), "'" + s + "' ends the lease");
+
+                // Anything we have never heard of changes nothing, which is the
+                // safe direction: a machine stays yours until something says
+                // otherwise, and walking off says otherwise.
+                foreach (var s in new[] { "Idle", "Attract Mode", "", "Machine Is Frozen", "Payout" })
+                {
+                    Assert.True(!Occupancy.IsClaim(s), "'" + s + "' is not a claim");
+                    Assert.True(!Occupancy.IsRelease(s), "'" + s + "' is not a release");
+                }
+                Assert.True(!Occupancy.IsClaim(null) && !Occupancy.IsRelease(null), "and neither is nothing");
+
+                // The backstop, for the exits across 72 controllers we have not named.
+                Assert.True(!Occupancy.WalkedAway(0f), "standing at it is not walking away");
+                Assert.True(!Occupancy.WalkedAway(Occupancy.WalkAwayDistance), "nor is leaning back");
+                Assert.True(Occupancy.WalkedAway(Occupancy.WalkAwayDistance + 0.1f), "crossing the room is");
+                Assert.True(Occupancy.WalkAwayGrace > 0f, "and it has to last, not just happen once");
+
+                c.Detail = "the lease survives the round instead of ending two seconds in";
             });
         }
 
