@@ -1,6 +1,20 @@
 CHANGELOG
 =========
 
+0.11.0
+------
+* Local test mode - two copies of the game on one PC play together over
+  loopback instead of Steam, so I can test multiplayer without needing a
+  second person. First window to start hosts, second one joins. Turn on
+  LocalTestMode in the config. Needs the single-instance line taken out of
+  TheCoinGame_Data\boot.config and a steam_appid.txt in the game folder,
+  otherwise launching the exe again just focuses the window you've got.
+* The guest window can't write to your save - two windows sharing one save
+  folder is how saves get corrupted. If it can't guarantee that it refuses
+  to start, unless you turn off GuestWindowMustNotSave.
+* Not LAN play. No acks, no resends. Nothing gets dropped on 127.0.0.1 so it
+  doesn't need them, but it would over a real network.
+
 0.10.1
 ------
 * Fixed the monitor mover messing up your resolution. It was forcing the

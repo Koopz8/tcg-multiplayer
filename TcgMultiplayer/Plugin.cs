@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.10.1";
+        public const string Version = "0.11.0";
 
         /// <summary>
         /// When this DLL was written, read off the file itself. Shown in the
@@ -142,7 +142,37 @@ namespace TcgMultiplayer
                 "Multiplies the value fed to the walk/run blend. Raise it if remote bodies "
                 + "glide with their legs barely moving, lower it if they sprint on the spot.");
 
-            _session = new Session();
+            var pLocalTest = cat.CreateEntry("LocalTestMode", false, "Local test mode (two windows on one PC)",
+                "Runs the mod's networking over loopback instead of Steam, so two copies of the game "
+                + "on this PC can play together. The first window is the host, the second is a guest "
+                + "and CANNOT write to your save. For testing without a second person - turn it off "
+                + "for real play. Requires launching the second copy from TheCoinGame.exe directly.");
+
+            // Harmony has to exist before the session, because local test mode
+            // needs the save block patched before a guest window is allowed to
+            // come up at all.
+            _harmony = new HarmonyLib.Harmony("com.mason.tcgmultiplayer");
+
+            var pGuestMustNotSave = cat.CreateEntry("GuestWindowMustNotSave", true,
+                "Guest test window must not be able to save",
+                "Local test mode only. Two windows share one save folder, so the guest window is "
+                + "stopped from writing to it. With this on, a guest window that can't be stopped "
+                + "refuses to start at all. Turn it off only if you have no save worth protecting - "
+                + "then it warns instead of refusing.");
+
+            bool wantLocal = pLocalTest.Value || LocalTest.RequestedOnCommandLine();
+            ITransport lanNet = null;
+            ILobbyBackend lanLobby = null;
+            if (wantLocal && !LocalTest.TryStart(_harmony, pGuestMustNotSave.Value, out lanNet, out lanLobby))
+            {
+                Warn("Local test mode did not start: " + LocalTest.Refusal + ". Using Steam as normal.");
+                lanNet = null; lanLobby = null;
+            }
+
+            _session = lanNet != null && lanLobby != null
+                ? new Session(lanNet, lanLobby)
+                : new Session();
+
             _avatars = new AvatarDirector(_session);
             _avatars.SendRate = _pSendRate.Value;
             _avatars.MirrorDelay = _pMirrorDelay.Value;
@@ -232,7 +262,6 @@ namespace TcgMultiplayer
                 SaveGuard.ArmForNextSession();
             };
 
-            _harmony = new HarmonyLib.Harmony("com.mason.tcgmultiplayer");
             try { _machines.ApplyPatches(_harmony); }
             catch (Exception ex) { Warn("Harmony patching failed: " + ex); }
 
@@ -279,7 +308,10 @@ namespace TcgMultiplayer
         private void BuildTickDelegates()
         {
             _doInput = TickInput;
-            _doNet = () => _session.Tick();
+            // The local lobby's presence files are read and written here, on the
+            // same beat as the session, so a window that closed is noticed by
+            // the same pass that would have noticed a Steam member leaving.
+            _doNet = () => { LocalTest.Tick(); _session.Tick(); };
             _doAvatars = () => _avatars.Tick();
             _doMachines = () => _machines.Tick();
             _doWorld = () => _world.Tick();
@@ -398,6 +430,9 @@ namespace TcgMultiplayer
             try { _machines.ReleaseEverything(); } catch { }
             try { _avatars.DespawnAll(); } catch { }
             try { InputLock.Set(false); } catch { }
+            // Drops our presence file and frees the port, so the slot is
+            // available again immediately rather than after a heartbeat timeout.
+            try { LocalTest.Stop(); } catch { }
         }
 
         /// <summary>

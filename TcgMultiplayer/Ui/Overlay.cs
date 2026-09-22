@@ -254,6 +254,28 @@ namespace TcgMultiplayer.Ui
                 GUILayout.Label("Paste a lobby ID, or just use Host + Invite friend.", _dim);
             }
 
+            // ---- local test mode --------------------------------------------
+            if (Net.LocalTest.Active)
+            {
+                GUILayout.Space(6);
+                GUILayout.Label("Local test mode", _head);
+                GUILayout.Label(Net.LocalTest.Status, _mono);
+                GUILayout.Label(Net.LocalTest.IsHostWindow
+                    ? "This is window 1. Host here, then open a second copy of the game and Join in it."
+                    : "This is a test window. It will NOT write to your save.", _dim);
+                if (Net.LocalTest.Transport != null)
+                    GUILayout.Label("loopback: " + Net.LocalTest.Transport.PacketsOut + " out, "
+                                  + Net.LocalTest.Transport.PacketsIn + " in"
+                                  + (Net.LocalTest.Transport.Malformed > 0
+                                     ? "  ·  " + Net.LocalTest.Transport.Malformed + " malformed" : ""), _dim);
+            }
+            else if (!string.IsNullOrEmpty(Net.LocalTest.Refusal))
+            {
+                GUILayout.Space(6);
+                GUILayout.Label("Local test mode", _head);
+                GUILayout.Label("Did not start: " + Net.LocalTest.Refusal, _dim);
+            }
+
             // ---- monitor ----------------------------------------------------
             GUILayout.Space(6);
             GUILayout.Label("Monitor", _head);

@@ -27,6 +27,7 @@ namespace TcgRig
             all.AddRange(DiagnosisScenarios.All);
             all.AddRange(DisplayScenarios.All);
             all.AddRange(VehicleScenarios.All);
+            all.AddRange(LocalTestScenarios.All);
 
             foreach (var scenario in all)
             {
