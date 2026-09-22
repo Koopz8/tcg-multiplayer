@@ -19,7 +19,7 @@ namespace TcgMultiplayer.Ui
         private readonly AvatarDirector _av;
         private readonly MachineDirector _mc;
         private readonly WorldState _world;
-        private Rect _rect = new Rect(24, 24, 470, 620);
+        private Rect _rect = new Rect(24, 24, 470, 600);
         private Vector2 _scroll;
         // The body scrolls. Without this the panel simply clipped at 430px and
         // everything past "Shared island" — self-test, performance, monitor,
@@ -30,9 +30,13 @@ namespace TcgMultiplayer.Ui
         private string _joinDraft = "";
         private bool _showJoinField;
 
-        private GUIStyle _mono, _head, _dim, _alert;
+        private GUIStyle _mono, _head, _dim, _alert, _win, _btn;
+        private Texture2D _bgTex;
         private bool _stylesReady;
         private bool _showAdvanced;
+        // Performance and health are for when something is wrong. Folded away
+        // by default so the panel opens on the four things you actually use.
+        private bool _showDiagnostics;
 
         public bool Visible;
 
@@ -56,21 +60,66 @@ namespace TcgMultiplayer.Ui
             EnsureStyles();
             var focused = GUI.GetNameOfFocusedControl();
             TypingInABox = focused == "chatField" || focused == "joinField";
+            ClampToScreen();
             _rect = GUI.Window(WinId, _rect, DrawWindow,
-                               "TcgMultiplayer " + Plugin.Version + "  ·  built " + Plugin.BuildStamp);
+                               "TcgMultiplayer " + Plugin.Version + "  ·  built " + Plugin.BuildStamp,
+                               _win);
         }
 
         private void EnsureStyles()
         {
             if (_stylesReady) return;
+
+            // The default IMGUI window is translucent grey, which over a neon
+            // arcade floor is close to unreadable. One flat dark pixel, stretched.
+            _bgTex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+            _bgTex.SetPixel(0, 0, new Color(0.08f, 0.08f, 0.10f, 0.97f));
+            _bgTex.Apply();
+            _bgTex.hideFlags = HideFlags.HideAndDontSave;
+
+            var brass = new Color(1f, 0.86f, 0.55f);
+
+            _win = new GUIStyle(GUI.skin.window);
+            _win.normal.background = _bgTex;
+            _win.onNormal.background = _bgTex;
+            _win.normal.textColor = brass;
+            _win.onNormal.textColor = brass;
+            _win.border = new RectOffset(0, 0, 0, 0);
+            // Top padding clears the title bar. Without it the first line of
+            // content is drawn straight through the title.
+            _win.padding = new RectOffset(12, 12, 26, 10);
+            _win.fontSize = 12;
+
+            // Every text style wraps. Anything that doesn't wrap runs off the
+            // right edge and drags a horizontal scrollbar in with it.
             _mono = new GUIStyle(GUI.skin.label) { fontSize = 12, wordWrap = true, richText = false };
-            _head = new GUIStyle(GUI.skin.label) { fontSize = 13 };
-            _head.normal.textColor = new Color(1f, 0.86f, 0.55f);   // brass, matching the plan page
-            _dim = new GUIStyle(GUI.skin.label) { fontSize = 11 };
+            _head = new GUIStyle(GUI.skin.label) { fontSize = 13, wordWrap = true };
+            _head.normal.textColor = brass;
+            _head.margin = new RectOffset(0, 0, 4, 2);
+            _dim = new GUIStyle(GUI.skin.label) { fontSize = 11, wordWrap = true };
             _dim.normal.textColor = new Color(0.72f, 0.72f, 0.70f);
             _alert = new GUIStyle(GUI.skin.label) { fontSize = 12, wordWrap = true };
             _alert.normal.textColor = new Color(1f, 0.55f, 0.45f);
+
+            _btn = new GUIStyle(GUI.skin.button) { fontSize = 12, wordWrap = false };
+            _btn.padding = new RectOffset(8, 8, 4, 4);
+
             _stylesReady = true;
+        }
+
+        /// <summary>
+        /// Keep the panel on the screen and no taller than it. Moving the game
+        /// between monitors changes the resolution under us, so a size that was
+        /// fine a second ago can be taller than the display now.
+        /// </summary>
+        private void ClampToScreen()
+        {
+            float maxH = Mathf.Max(260f, Screen.height - 60f);
+            float maxW = Mathf.Max(360f, Screen.width - 60f);
+            _rect.width = Mathf.Min(_rect.width, maxW);
+            _rect.height = Mathf.Min(_rect.height, maxH);
+            _rect.x = Mathf.Clamp(_rect.x, 0f, Mathf.Max(0f, Screen.width - _rect.width));
+            _rect.y = Mathf.Clamp(_rect.y, 0f, Mathf.Max(0f, Screen.height - _rect.height));
         }
 
         private void DrawWindow(int id)
@@ -112,12 +161,15 @@ namespace TcgMultiplayer.Ui
             {
                 GUILayout.Label("Some of the mod switched itself off after repeated errors:", _alert);
                 foreach (var b in Guard.Broken) GUILayout.Label("   " + b, _dim);
-                if (GUILayout.Button("Try those again", GUILayout.Height(20))) Guard.ResetAll();
+                if (GUILayout.Button("Try those again", _btn, GUILayout.Height(20))) Guard.ResetAll();
                 GUILayout.Label("Send MelonLoader\\Latest.log with a bug report — it has the detail.", _dim);
                 GUILayout.Space(6);
             }
 
-            _bodyScroll = GUILayout.BeginScrollView(_bodyScroll);
+            // Vertical only. A horizontal scrollbar here means something
+            // isn't wrapping, and the fix is the wrapping, not the bar.
+            _bodyScroll = GUILayout.BeginScrollView(_bodyScroll, false, true,
+                                                   GUIStyle.none, GUI.skin.verticalScrollbar);
 
             GUILayout.Label("You: " + _s.SelfName + "   (" + _s.SelfId.m_SteamID + ")", _dim);
             GUILayout.Label("Session: " + StateLine(), _head);
@@ -127,14 +179,14 @@ namespace TcgMultiplayer.Ui
             GUILayout.BeginHorizontal();
             if (_s.State == SessionState.Offline)
             {
-                if (GUILayout.Button("Host", GUILayout.Height(24))) _s.Host(Plugin.MaxPlayers);
+                if (GUILayout.Button("Host", _btn, GUILayout.Height(24))) _s.Host(Plugin.MaxPlayers);
                 if (GUILayout.Button(_showJoinField ? "Cancel join" : "Join by lobby ID", GUILayout.Height(24)))
                     _showJoinField = !_showJoinField;
             }
             else
             {
-                if (GUILayout.Button("Invite friend", GUILayout.Height(24))) _s.OpenInviteOverlay();
-                if (GUILayout.Button("Leave", GUILayout.Height(24))) _s.Leave();
+                if (GUILayout.Button("Invite friend", _btn, GUILayout.Height(24))) _s.OpenInviteOverlay();
+                if (GUILayout.Button("Leave", _btn, GUILayout.Height(24))) _s.Leave();
             }
             GUILayout.EndHorizontal();
 
@@ -143,7 +195,7 @@ namespace TcgMultiplayer.Ui
                 GUILayout.BeginHorizontal();
                 GUI.SetNextControlName("joinField");
                 _joinDraft = GUILayout.TextField(_joinDraft ?? "", GUILayout.Height(22));
-                if (GUILayout.Button("Go", GUILayout.Width(44), GUILayout.Height(22)))
+                if (GUILayout.Button("Go", _btn, GUILayout.Width(44), GUILayout.Height(22)))
                 {
                     ulong lobbyId;
                     if (ulong.TryParse((_joinDraft ?? "").Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out lobbyId))
@@ -158,7 +210,7 @@ namespace TcgMultiplayer.Ui
             GUILayout.Label("Monitor", _head);
             if (!DisplayManager.Supported)
             {
-                if (GUILayout.Button("Look for monitors", GUILayout.Height(20)))
+                if (GUILayout.Button("Look for monitors", _btn, GUILayout.Height(20)))
                     DisplayManager.Refresh();
                 GUILayout.Label(DisplayManager.Status, _dim);
             }
@@ -172,23 +224,22 @@ namespace TcgMultiplayer.Ui
                                     i == here ? _mono : _dim);
                     GUILayout.FlexibleSpace();
                     GUI.enabled = i != here;
-                    if (GUILayout.Button("Move here", GUILayout.Width(88), GUILayout.Height(20)))
+                    if (GUILayout.Button("Move here", _btn, GUILayout.Width(88), GUILayout.Height(20)))
                         DisplayManager.MoveTo(i);
                     GUI.enabled = true;
                     GUILayout.EndHorizontal();
                 }
 
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("Remember this one", GUILayout.Height(22)))
+                if (GUILayout.Button("Remember this one", _btn, GUILayout.Height(22)))
                     Plugin.RememberMonitor();
-                if (GUILayout.Button("Forget", GUILayout.Width(70), GUILayout.Height(22)))
+                if (GUILayout.Button("Forget", _btn, GUILayout.Width(70), GUILayout.Height(22)))
                     Plugin.ForgetMonitor();
                 GUILayout.EndHorizontal();
 
                 GUILayout.Label(DisplayManager.Status, _dim);
-                GUILayout.Label("The game has no monitor setting of its own, so this is the mod's. "
-                              + Plugin.NextMonitorKeyName + " cycles monitors even if you can't see "
-                              + "the game to open this panel.", _dim);
+                GUILayout.Label(Plugin.NextMonitorKeyName + " cycles monitors — works even when you can't "
+                              + "see the game.", _dim);
             }
 
             // ---- peers ----------------------------------------------------
@@ -239,7 +290,7 @@ namespace TcgMultiplayer.Ui
             GUILayout.BeginHorizontal();
             GUILayout.Label("Machines (" + _mc.MachineCount + ")", _head);
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Rescan", GUILayout.Width(64), GUILayout.Height(20))) _mc.RebuildNow();
+            if (GUILayout.Button("Rescan", _btn, GUILayout.Width(64), GUILayout.Height(20))) _mc.RebuildNow();
             GUILayout.EndHorizontal();
 
             if (_mc.MachineCount == 0)
@@ -318,7 +369,7 @@ namespace TcgMultiplayer.Ui
             GUILayout.Space(6);
             GUILayout.Label("Your save", _head);
             GUILayout.Label("Backup: " + SaveGuard.Status, _dim);
-            if (GUILayout.Button("Back up my save now", GUILayout.Height(22))) SaveGuard.Backup();
+            if (GUILayout.Button("Back up my save now", _btn, GUILayout.Height(22))) SaveGuard.Backup();
 
             // ---- session report ---------------------------------------------
             GUILayout.Space(6);
@@ -326,7 +377,7 @@ namespace TcgMultiplayer.Ui
             GUILayout.Label(SessionReport.Status, _dim);
             GUILayout.BeginHorizontal();
             GUI.enabled = !string.IsNullOrEmpty(SessionReport.Last);
-            if (GUILayout.Button("Copy report", GUILayout.Height(22)))
+            if (GUILayout.Button("Copy report", _btn, GUILayout.Height(22)))
             {
                 try { GUIUtility.systemCopyBuffer = SessionReport.Last; }
                 catch (Exception ex) { Plugin.Warn("Copy failed: " + ex.Message); }
@@ -340,13 +391,13 @@ namespace TcgMultiplayer.Ui
             GUILayout.Label(SelfTest.Summary, _mono);
 
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Run checks", GUILayout.Height(22)))
+            if (GUILayout.Button("Run checks", _btn, GUILayout.Height(22)))
             {
                 SelfTest.LastDiagnosis = Health.Now(_s, _mc, _av);
                 SelfTest.RunAll(_s, _mc, _world);
             }
             GUI.enabled = SelfTest.HasRun;
-            if (GUILayout.Button("Copy result", GUILayout.Height(22)))
+            if (GUILayout.Button("Copy result", _btn, GUILayout.Height(22)))
             {
                 try { GUIUtility.systemCopyBuffer = SelfTest.Report(); }
                 catch (Exception ex) { Plugin.Warn("Copy failed: " + ex.Message); }
@@ -373,34 +424,41 @@ namespace TcgMultiplayer.Ui
                               + "progression back. Takes a moment. Load a save first.", _dim);
             }
 
-            // ---- performance ------------------------------------------------
+            // ---- diagnostics (folded) ---------------------------------------
             GUILayout.Space(6);
-            GUILayout.Label("Performance", _head);
-            GUILayout.Label(Perf.Summary, _mono);
-            GUILayout.Label(Perf.ModCostLine, _dim);
-            foreach (var b in Perf.Breakdown) GUILayout.Label(b, _dim);
-            if (Perf.WorstMs > 100f)
-                GUILayout.Label("Worst frame over 100 ms — that's a visible hitch. If the breakdown "
-                              + "above is near zero, it isn't this mod.", _dim);
+            _showDiagnostics = GUILayout.Toggle(_showDiagnostics,
+                "  Diagnostics — frame times, what the mod could and couldn't find");
+            if (_showDiagnostics)
+            {
+                // ---- performance ------------------------------------------------
+                GUILayout.Space(6);
+                GUILayout.Label("Performance", _head);
+                GUILayout.Label(Perf.Summary, _mono);
+                GUILayout.Label(Perf.ModCostLine, _dim);
+                foreach (var b in Perf.Breakdown) GUILayout.Label(b, _dim);
+                if (Perf.WorstMs > 100f)
+                    GUILayout.Label("Worst frame over 100 ms — that's a visible hitch. If the breakdown "
+                                  + "above is near zero, it isn't this mod.", _dim);
 
-            // ---- health ---------------------------------------------------
-            GUILayout.Space(6);
-            GUILayout.Label("Health", _head);
-            GUILayout.Label("build " + (CompatCheck.GameHash ?? "?") + "  ·  " + CompatCheck.Summary, _mono);
-            // The per-item list is only meaningful once there is a save to bind
-            // against. Before that every line is a false alarm.
-            if (dx.Verdict == Verdict.Waiting)
-            {
-                GUILayout.Label("The list below fills in once a save is loaded.", _dim);
+                // ---- health ---------------------------------------------------
+                GUILayout.Space(6);
+                GUILayout.Label("Health", _head);
+                GUILayout.Label("build " + (CompatCheck.GameHash ?? "?") + "  ·  " + CompatCheck.Summary, _mono);
+                // The per-item list is only meaningful once there is a save to bind
+                // against. Before that every line is a false alarm.
+                if (dx.Verdict == Verdict.Waiting)
+                {
+                    GUILayout.Label("The list below fills in once a save is loaded.", _dim);
+                }
+                else
+                {
+                    foreach (var c in CompatCheck.Items)
+                        if (!c.Ok) GUILayout.Label("   MISSING: " + c.What
+                                                   + (string.IsNullOrEmpty(c.Detail) ? "" : " — " + c.Detail), _dim);
+                }
+                GUILayout.Label("Steam stats: " + StatsLock.Status, _dim);
+                GUILayout.Label("Cursor: " + CursorGuard.Status, _dim);
             }
-            else
-            {
-                foreach (var c in CompatCheck.Items)
-                    if (!c.Ok) GUILayout.Label("   MISSING: " + c.What
-                                               + (string.IsNullOrEmpty(c.Detail) ? "" : " — " + c.Detail), _dim);
-            }
-            GUILayout.Label("Steam stats: " + StatsLock.Status, _dim);
-            GUILayout.Label("Cursor: " + CursorGuard.Status, _dim);
 
             // ---- solo test harness ----------------------------------------
             // Folded away by default. It's genuinely useful — it's how most of
@@ -433,13 +491,13 @@ namespace TcgMultiplayer.Ui
             else
             {
                 GUI.enabled = near != null;
-                if (GUILayout.Button("Record a round", GUILayout.Height(22)) && near != null)
+                if (GUILayout.Button("Record a round", _btn, GUILayout.Height(22)) && near != null)
                     _mc.Rehearse.StartRecording(near.Id, near.Label);
                 GUI.enabled = true;
             }
 
             GUI.enabled = _mc.Rehearse.HasTape && !_mc.Rehearse.Playing && !_mc.Rehearse.Recording;
-            if (GUILayout.Button("Replay as a friend", GUILayout.Height(22)))
+            if (GUILayout.Button("Replay as a friend", _btn, GUILayout.Height(22)))
             {
                 Machine tape;
                 if (_mc.TryGetMachine(_mc.Rehearse.RecordedMachine, out tape)) _mc.Rehearse.Play(tape);
@@ -461,14 +519,14 @@ namespace TcgMultiplayer.Ui
 
             GUILayout.BeginHorizontal();
             GUI.enabled = near != null;
-            if (GUILayout.Button("Fake: friend takes it", GUILayout.Height(22))) _mc.SimulateRemoteClaim(near);
-            if (GUILayout.Button("Fake: friend leaves", GUILayout.Height(22))) _mc.SimulateRemoteRelease(near);
+            if (GUILayout.Button("Fake: friend takes it", _btn, GUILayout.Height(22))) _mc.SimulateRemoteClaim(near);
+            if (GUILayout.Button("Fake: friend leaves", _btn, GUILayout.Height(22))) _mc.SimulateRemoteRelease(near);
             GUI.enabled = true;
             GUILayout.EndHorizontal();
             GUILayout.Label("\"Friend takes it\" should make the cabinet refuse your card. It will "
                           + "never freeze a machine you are standing in.", _dim);
 
-            if (GUILayout.Button("Release everything (stuck in a machine?)", GUILayout.Height(22)))
+            if (GUILayout.Button("Release everything (stuck in a machine?)", _btn, GUILayout.Height(22)))
                 _mc.ReleaseEverything();
 
             GUILayout.Label(Plugin.ToggleKeyName + " closes this. " + InputLock.Status
@@ -482,14 +540,16 @@ namespace TcgMultiplayer.Ui
         {
             GUILayout.Space(6);
             GUILayout.Label("Log", _head);
-            _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.MinHeight(120));
+            _scroll = GUILayout.BeginScrollView(_scroll, false, true,
+                                                GUIStyle.none, GUI.skin.verticalScrollbar,
+                                                GUILayout.MinHeight(110));
             for (int i = 0; i < _s.Chat.Count; i++) GUILayout.Label(_s.Chat[i], _mono);
             GUILayout.EndScrollView();
 
             GUILayout.BeginHorizontal();
             GUI.SetNextControlName("chatField");
             _chatDraft = GUILayout.TextField(_chatDraft ?? "", GUILayout.Height(22));
-            var send = GUILayout.Button("Send", GUILayout.Width(56), GUILayout.Height(22));
+            var send = GUILayout.Button("Send", _btn, GUILayout.Width(56), GUILayout.Height(22));
             GUILayout.EndHorizontal();
 
             var e = Event.current;
