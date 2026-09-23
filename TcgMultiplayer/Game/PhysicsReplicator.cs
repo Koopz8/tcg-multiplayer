@@ -53,8 +53,8 @@ namespace TcgMultiplayer.Game
         private readonly Dictionary<uint, List<Rigidbody>> _spectated = new Dictionary<uint, List<Rigidbody>>();
         private readonly HashSet<uint> _madeKinematic = new HashSet<uint>();
 
-        /// <summary>Machines we have already said the body counts differ on. Once each is plenty.</summary>
-        private readonly HashSet<uint> _mismatchLogged = new HashSet<uint>();
+        /// <summary>The gap we last reported per machine, so a CHANGING one is said again.</summary>
+        private readonly Dictionary<uint, int> _mismatchSaid = new Dictionary<uint, int>();
 
         public int BodiesSent, BodiesApplied, CountMismatches;
         public float LastPacketBytes;
@@ -183,20 +183,45 @@ namespace TcgMultiplayer.Game
             if (_scratch.Count != count)
             {
                 CountMismatches++;
-                if (_mismatchLogged.Add(m.Id))
+
+                // Re-said when the gap MOVES, not once per machine. A gap that
+                // grows round after round is the watcher accumulating parts of
+                // its own, which is a different fault from the two sides simply
+                // holding different numbers of coins — and saying it once hides
+                // exactly that.
+                int gap = _scratch.Count - count;
+                int said;
+                if (!_mismatchSaid.TryGetValue(m.Id, out said) || Mathf.Abs(gap - said) >= 16)
+                {
+                    _mismatchSaid[m.Id] = gap;
                     Plugin.Log("Physics: " + m.Label + " has " + _scratch.Count
                                + " moving parts here and " + count + " on the player's screen. "
                                + "Driving the " + n + " they share.");
+                }
             }
 
             bodies.Clear();
             bodies.AddRange(_scratch);
 
-            // Spectated bodies must stop simulating, or local physics fights the
-            // incoming stream and everything jitters. Only the ones we actually
-            // drive, though: freezing a coin nothing is sending us a pose for
-            // leaves it hanging in the air for the rest of the round.
-            for (int i = 0; i < n; i++)
+            // EVERYTHING under a spectated machine stops simulating, not only
+            // the parts we have a pose for.
+            //
+            // The first version froze the driven ones and left the rest alone,
+            // on the grounds that a coin nobody is sending us a pose for should
+            // not hang in the air. That was the wrong worry. What the spare
+            // ones actually do is keep falling, keep triggering the machine's
+            // own collectors, and keep the watcher's copy of the round running
+            // — and since the mirror is replaying the owner's events into that
+            // same machine, the watcher spawns its own coins on top. In the
+            // trace the watcher held 590 moving parts to the owner's 334, and
+            // its FSM count climbed 268 -> 712 -> 925 -> 1246 across three
+            // rounds without ever coming down.
+            //
+            // A body we cannot place is better still than moving on its own:
+            // still is at least consistent with a machine somebody else is
+            // playing, and it stops the two copies drifting further apart
+            // every second.
+            for (int i = 0; i < bodies.Count; i++)
                 if (bodies[i] != null && !bodies[i].isKinematic) bodies[i].isKinematic = true;
             _madeKinematic.Add(m.Id);
 
@@ -286,6 +311,15 @@ namespace TcgMultiplayer.Game
         }
 
         public int SpectatedMachines { get { return _spectated.Count; } }
+
+        /// <summary>
+        /// Are we being sent this machine's moving parts?
+        ///
+        /// Asked by the event mirror, which must keep its hands off a machine
+        /// whose contents arrive over the wire — see the note in Unpack about
+        /// a watcher running its own round.
+        /// </summary>
+        public bool IsSpectating(uint machineId) { return _spectated.ContainsKey(machineId); }
 
         // -------------------------------------------------------------- packing
 

@@ -183,6 +183,9 @@ namespace TcgMultiplayer.Game
         // we have written. Bounded: this is a diagnostic, not a feature, and an
         // unbounded one would fill the log with a coin pusher's idle loop.
         private readonly HashSet<uint> _watchStates = new HashSet<uint>();
+
+        /// <summary>Machines we have said we are not mirroring. Once each is plenty.</summary>
+        private readonly HashSet<uint> _mirrorMuted = new HashSet<uint>();
         private readonly Dictionary<uint, int> _stateLines = new Dictionary<uint, int>();
         private const int MaxStateLinesPerMachine = 90;
 
@@ -1341,6 +1344,29 @@ namespace TcgMultiplayer.Game
             // older build hasn't, and this is the end that gets puppeted. Refuse
             // it here too — the receiving side is the one with something to lose.
             if (ReferenceEquals(fsm, m.Controller)) return;
+
+            // And never replay events into a machine whose moving parts are
+            // already arriving over the wire.
+            //
+            // The two carry the same round by different means, and running both
+            // makes the watcher play its own copy underneath the one it is being
+            // shown: it spawns its own coins, its own collectors fire, and the
+            // two copies diverge further every second. In the trace the watcher
+            // held 590 moving parts to the owner's 334 and its FSM count climbed
+            // 268 -> 712 -> 925 -> 1246 over three rounds while the owner's went
+            // back to where it started.
+            //
+            // Where the parts are IS the round for these machines, so the stream
+            // wins. It costs the cabinet's lights and screen on a pusher, which
+            // is a real loss and a smaller one than a machine quietly filling up
+            // with coins nobody can ever collect.
+            if (Physics.IsSpectating(m.Id))
+            {
+                if (_mirrorMuted.Add(m.Id))
+                    Plugin.Log("Not replaying " + m.Label + "'s events — its moving parts are "
+                               + "coming over the wire, and running both plays the round twice.");
+                return;
+            }
 
             // Wallets are per-player. Someone else's round must not pay us, so the
             // economy is snapshotted around the replay and put back afterwards —
