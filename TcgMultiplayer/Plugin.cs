@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.11.14";
+        public const string Version = "0.11.15";
 
         /// <summary>
         /// When this DLL was written, read off the file itself. Shown in the
@@ -303,6 +303,7 @@ namespace TcgMultiplayer
         // reads nicely but allocates a fresh closure on every call — seven of
         // them a frame, four hundred a second, in a game already leaning on
         // Unity's incremental collector. Cached here they cost nothing.
+        private Action _doMachinesLate;
         private Action _doInput, _doNet, _doAvatars, _doMachines, _doWorld,
                        _doHealth, _doScene, _doNameplates, _doOverlay;
 
@@ -315,6 +316,7 @@ namespace TcgMultiplayer
             _doNet = () => { LocalTest.Tick(); _session.Tick(); };
             _doAvatars = () => _avatars.Tick();
             _doMachines = () => _machines.Tick();
+            _doMachinesLate = () => _machines.LateTick();
             _doWorld = () => _world.Tick();
             _doHealth = CompatCheck.ReportOnce;
             _doScene = () => { _avatars.OnSceneChanged(); _machines.OnSceneChanged(); };
@@ -388,6 +390,16 @@ namespace TcgMultiplayer
             if (Time.frameCount % 600 == 0) Guard.Run("health check", _doHealth);
 
             Perf.EndFrame();
+        }
+
+        /// <summary>
+        /// After every FSM and animator has had its turn. A spectated cabinet's
+        /// own idle logic keeps putting its screen objects back where it wants
+        /// them; whoever writes last wins, and this is last.
+        /// </summary>
+        public override void OnLateUpdate()
+        {
+            if (_doMachinesLate != null) Guard.Run("machines (late)", _doMachinesLate);
         }
 
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)

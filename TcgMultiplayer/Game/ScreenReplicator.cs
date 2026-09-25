@@ -42,6 +42,7 @@ namespace TcgMultiplayer.Game
             /// <summary>The text's own transform, then its parents up to the machine root.</summary>
             public Transform[] Chain;
             public Vector3[] LastPos;
+            public bool[] LastOn;
         }
 
         private const int MaxChain = 6;
@@ -196,10 +197,21 @@ namespace TcgMultiplayer.Game
                 // the bottom, because the slide is the box's transform, not
                 // its string. So the text's object and its parents go too.
                 bool moved = false;
-                if (f.LastPos == null || f.LastPos.Length != f.Chain.Length) { f.LastPos = new Vector3[f.Chain.Length]; moved = true; }
+                if (f.LastPos == null || f.LastPos.Length != f.Chain.Length)
+                {
+                    f.LastPos = new Vector3[f.Chain.Length];
+                    f.LastOn = new bool[f.Chain.Length];
+                    moved = true;
+                }
                 for (int c = 0; c < f.Chain.Length; c++)
                 {
                     if (f.Chain[c] == null) continue;
+                    // Menus are panels switched on and off; the results screen
+                    // that stayed up on the watcher through the second round
+                    // was one we had switched on and never off. Each level's
+                    // own flag goes, and the watcher sets it exactly.
+                    bool on = f.Chain[c].gameObject.activeSelf;
+                    if (on != f.LastOn[c]) { f.LastOn[c] = on; moved = true; }
                     var lp = f.Chain[c].localPosition;
                     if ((lp - f.LastPos[c]).sqrMagnitude > 1e-6f)
                     {
@@ -236,6 +248,7 @@ namespace TcgMultiplayer.Game
                 for (int c = 0; c < f.Chain.Length; c++)
                 {
                     var lp = f.LastPos[c];
+                    w.Write((byte)(f.LastOn[c] ? 1 : 0));
                     w.Write(lp.x); w.Write(lp.y); w.Write(lp.z);
                 }
             }
@@ -283,7 +296,12 @@ namespace TcgMultiplayer.Game
                 var txt = ReadStr(r);
                 int chain = r.ReadByte();
                 var pos = new Vector3[chain];
-                for (int c = 0; c < chain; c++) pos[c] = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                var on = new bool[chain];
+                for (int c = 0; c < chain; c++)
+                {
+                    on[c] = r.ReadByte() != 0;
+                    pos[c] = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                }
 
                 Field f;
                 if (!w.ByKey.TryGetValue(key, out f) || f.Comp == null) { missing++; continue; }
@@ -294,19 +312,6 @@ namespace TcgMultiplayer.Game
                     if (tr == null) continue;
                     if (!w.OriginalPos.ContainsKey(tr)) w.OriginalPos[tr] = tr.localPosition;
 
-                    Vector3 placed;
-                    if (w.Placed.TryGetValue(tr, out placed) && (tr.localPosition - placed).sqrMagnitude > 1e-4f)
-                    {
-                        // We put it somewhere and it isn't there any more —
-                        // something local (an animator, a layout) is driving it.
-                        MovesOverridden++;
-                        if (w.OverrideLogs < 6)
-                        {
-                            w.OverrideLogs++;
-                            Plugin.Log("Screen: " + tr.name + " (" + key + " level " + c + ") was put at " + placed.ToString("F1")
-                                       + " and is now at " + tr.localPosition.ToString("F1") + " — something here keeps moving it.");
-                        }
-                    }
                     if ((tr.localPosition - pos[c]).sqrMagnitude > 1e-6f)
                     {
                         Moves++;
@@ -319,27 +324,12 @@ namespace TcgMultiplayer.Game
                         tr.localPosition = pos[c];
                     }
                     w.Placed[tr] = pos[c];
+                    if (tr.gameObject.activeSelf != on[c]) SetActiveRemembering(w, tr.gameObject, on[c]);
                 }
 
                 if (!w.OriginalText.ContainsKey(f)) w.OriginalText[f] = ReadText(f);
                 WriteText(f, txt);
 
-                // Menus are shown and hidden by switching their objects on and
-                // off. Follow the text's own object; when it's on, also turn on
-                // any parent up to the root that's off. Only walk up when
-                // turning things ON — a hidden menu is hidden at one level, and
-                // switching every ancestor off would take the whole cabinet.
-                var own = f.Comp.gameObject;
-                if (own.activeSelf != active) SetActiveRemembering(w, own, active);
-                if (active)
-                {
-                    var t = f.Comp.transform.parent;
-                    while (t != null && t != m.Root)
-                    {
-                        if (!t.gameObject.activeSelf) SetActiveRemembering(w, t.gameObject, true);
-                        t = t.parent;
-                    }
-                }
                 applied++;
             }
             Applied += applied;
@@ -351,6 +341,27 @@ namespace TcgMultiplayer.Game
             if (go == null || go.activeSelf == on) return;
             if (!w.OriginalActive.ContainsKey(go)) w.OriginalActive[go] = go.activeSelf;
             go.SetActive(on);
+        }
+
+        /// <summary>
+        /// Every frame, after the cabinet's own FSMs and animators: put each
+        /// placed object back where the owner has it. The watcher's idle logic
+        /// was returning the score marker to its rest position between our
+        /// packets, five times a second, and it always ran after us.
+        /// </summary>
+        public void LateRender()
+        {
+            if (_watched.Count == 0) return;
+            foreach (var kv in _watched)
+            {
+                var w = kv.Value;
+                foreach (var p in w.Placed)
+                {
+                    var tr = p.Key;
+                    if (tr == null) continue;
+                    if ((tr.localPosition - p.Value).sqrMagnitude > 1e-6f) { tr.localPosition = p.Value; MovesOverridden++; }
+                }
+            }
         }
 
         /// <summary>Puts every string and every switch back the way the watcher had it.</summary>

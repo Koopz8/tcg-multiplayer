@@ -1340,6 +1340,12 @@ namespace TcgMultiplayer.Game
             Movers.Push(m, pose);
         }
 
+        /// <summary>Runs in LateUpdate: re-asserts the spectated screen after the cabinet's own logic has run.</summary>
+        public void LateTick()
+        {
+            Screen.LateRender();
+        }
+
         private void OnScreen(CSteamID from, uint machineId, byte[] payload)
         {
             Machine m;
