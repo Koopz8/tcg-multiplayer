@@ -227,6 +227,7 @@ namespace TcgMultiplayer.Game
 
         public void OnSceneChanged()
         {
+            _scout.Reset();
             Physics.ReleaseAll(); Screen.ReleaseAll();
             Movers.ReleaseAll();
             Ride.Leave(RigSource != null ? RigSource() : null, "the scene changed");

@@ -19,7 +19,7 @@ namespace TcgMultiplayer.Game
     internal sealed class LooseItemScout
     {
         private const float ScanEvery = 2f;
-        private const int LogCap = 24;
+        private const int LogCap = 60;
         private const float FollowFor = 60f;
 
         private sealed class Seen
@@ -36,8 +36,22 @@ namespace TcgMultiplayer.Game
         private bool _primed;
         private int _logs;
 
+        /// <summary>A new scene is a new world; start the baseline over.</summary>
+        public void Reset()
+        {
+            _known.Clear();
+            _following.Clear();
+            _primed = false;
+        }
+
         public void Tick(IEnumerable<Machine> machines, PlayerRig rig)
         {
+            // Not until the player is standing in the arcade. The title
+            // screen's character picker is full of loose props — trash bags,
+            // robo minions — and the first version spent its whole log budget
+            // on them before a single ticket came out of a machine.
+            if (rig == null || !rig.Valid) return;
+
             float now = Time.time;
             if (now < _nextScanAt) return;
             _nextScanAt = now + ScanEvery;
@@ -64,6 +78,7 @@ namespace TcgMultiplayer.Game
                 for (int r = 0; r < roots.Count; r++) if (t.IsChildOf(roots[r])) { underMachine = true; break; }
                 if (underMachine) continue;
                 if (player != null && t.IsChildOf(player)) continue;
+                if (t.root != null && t.root.name.StartsWith("PLAYER Picker", StringComparison.Ordinal)) continue;
 
                 if (_logs < LogCap)
                 {
