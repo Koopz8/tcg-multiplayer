@@ -66,12 +66,17 @@ namespace TcgMultiplayer.Game
             public readonly Dictionary<Field, string> OriginalText = new Dictionary<Field, string>();
             public readonly Dictionary<GameObject, bool> OriginalActive = new Dictionary<GameObject, bool>();
             public readonly Dictionary<Transform, Vector3> OriginalPos = new Dictionary<Transform, Vector3>();
+            /// <summary>Where we last put each object, to notice something on our side moving it back.</summary>
+            public readonly Dictionary<Transform, Vector3> Placed = new Dictionary<Transform, Vector3>();
+            public int OverrideLogs;
             public float RescanAt;
             public bool Described;
         }
         private readonly Dictionary<uint, Watched> _watched = new Dictionary<uint, Watched>();
 
-        public int FieldsFound, Sent, Applied, Unmatched;
+        public int FieldsFound, Sent, Applied, Unmatched, Moves, MovesOverridden;
+        private int _moveLogs;
+        private const int MoveLogCap = 12;
 
         // ---------------------------------------------------------- discovery
 
@@ -196,7 +201,16 @@ namespace TcgMultiplayer.Game
                 {
                     if (f.Chain[c] == null) continue;
                     var lp = f.Chain[c].localPosition;
-                    if ((lp - f.LastPos[c]).sqrMagnitude > 1e-6f) { f.LastPos[c] = lp; moved = true; }
+                    if ((lp - f.LastPos[c]).sqrMagnitude > 1e-6f)
+                    {
+                        if (!fresh && _moveLogs < MoveLogCap && f.Comp.gameObject.activeInHierarchy)
+                        {
+                            _moveLogs++;
+                            Plugin.Log("Screen move on " + m.Label + ": " + f.Key + " level " + c + " (" + f.Chain[c].name + ") "
+                                       + f.LastPos[c].ToString("F1") + " -> " + lp.ToString("F1"));
+                        }
+                        f.LastPos[c] = lp; moved = true;
+                    }
                 }
 
                 if (keyframe || moved || txt != f.LastSent || active != f.LastActive)
@@ -279,7 +293,32 @@ namespace TcgMultiplayer.Game
                     var tr = f.Chain[c];
                     if (tr == null) continue;
                     if (!w.OriginalPos.ContainsKey(tr)) w.OriginalPos[tr] = tr.localPosition;
-                    if ((tr.localPosition - pos[c]).sqrMagnitude > 1e-6f) tr.localPosition = pos[c];
+
+                    Vector3 placed;
+                    if (w.Placed.TryGetValue(tr, out placed) && (tr.localPosition - placed).sqrMagnitude > 1e-4f)
+                    {
+                        // We put it somewhere and it isn't there any more —
+                        // something local (an animator, a layout) is driving it.
+                        MovesOverridden++;
+                        if (w.OverrideLogs < 6)
+                        {
+                            w.OverrideLogs++;
+                            Plugin.Log("Screen: " + tr.name + " (" + key + " level " + c + ") was put at " + placed.ToString("F1")
+                                       + " and is now at " + tr.localPosition.ToString("F1") + " — something here keeps moving it.");
+                        }
+                    }
+                    if ((tr.localPosition - pos[c]).sqrMagnitude > 1e-6f)
+                    {
+                        Moves++;
+                        if (_moveLogs < MoveLogCap && (tr.localPosition - pos[c]).sqrMagnitude > 1f)
+                        {
+                            _moveLogs++;
+                            Plugin.Log("Screen: moving " + tr.name + " (" + key + " level " + c + ") "
+                                       + tr.localPosition.ToString("F1") + " -> " + pos[c].ToString("F1"));
+                        }
+                        tr.localPosition = pos[c];
+                    }
+                    w.Placed[tr] = pos[c];
                 }
 
                 if (!w.OriginalText.ContainsKey(f)) w.OriginalText[f] = ReadText(f);

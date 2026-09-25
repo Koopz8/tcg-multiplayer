@@ -467,7 +467,9 @@ namespace TcgMultiplayer.Ui
                 if (_mc.Screen.Sent + _mc.Screen.Applied > 0)
                     GUILayout.Label("screen: " + _mc.Screen.FieldsFound + " text fields, " + _mc.Screen.Sent + " sent, "
                                   + _mc.Screen.Applied + " applied"
-                                  + (_mc.Screen.Unmatched > 0 ? ", " + _mc.Screen.Unmatched + " with nowhere to go" : ""), _dim);
+                                  + (_mc.Screen.Unmatched > 0 ? ", " + _mc.Screen.Unmatched + " with nowhere to go" : "")
+                                  + (_mc.Screen.Moves > 0 ? ", " + _mc.Screen.Moves + " moves" : "")
+                                  + (_mc.Screen.MovesOverridden > 0 ? ", " + _mc.Screen.MovesOverridden + " moved back by something here" : ""), _dim);
                 if (_mc.Physics.PacketsReceived > 0)
                     GUILayout.Label("streaming in: " + _mc.Physics.RecvChangedLastPacket + " of "
                                   + _mc.Physics.RecvPosesLastPacket + " poses changed last packet (peak "
