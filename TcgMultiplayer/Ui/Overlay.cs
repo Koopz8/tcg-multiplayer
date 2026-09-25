@@ -454,6 +454,12 @@ namespace TcgMultiplayer.Ui
                                  ? "  ·  spectating " + _mc.Physics.SpectatedMachines : "")
                               + (_mc.Physics.CountMismatches > 0
                                  ? "  ·  " + _mc.Physics.CountMismatches + " count mismatches" : ""), _dim);
+                if (_mc.Physics.PlacedAlreadyOnScreen + _mc.Physics.PlacedSwitchedOn + _mc.Physics.PlacedNothingToDraw > 0)
+                    GUILayout.Label("of what we're placing: " + _mc.Physics.PlacedAlreadyOnScreen
+                                  + " were already on screen, " + _mc.Physics.PlacedSwitchedOn
+                                  + " were switched off and we turned on"
+                                  + (_mc.Physics.PlacedNothingToDraw > 0
+                                     ? ", " + _mc.Physics.PlacedNothingToDraw + " have nothing to draw" : ""), _dim);
             }
 
             // ---- vehicles -------------------------------------------------

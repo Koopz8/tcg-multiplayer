@@ -53,10 +53,28 @@ namespace TcgMultiplayer.Game
         private readonly Dictionary<uint, List<Rigidbody>> _spectated = new Dictionary<uint, List<Rigidbody>>();
         private readonly HashSet<uint> _madeKinematic = new HashSet<uint>();
 
+        /// <summary>
+        /// GameObjects we switched on so a streamed body would draw, per machine,
+        /// in the order we switched them on. Put back exactly on release.
+        /// </summary>
+        private readonly Dictionary<uint, List<GameObject>> _switchedOn = new Dictionary<uint, List<GameObject>>();
+
+        /// <summary>Bodies already counted toward the on-screen figures, so each is counted once.</summary>
+        private readonly Dictionary<uint, HashSet<Rigidbody>> _counted = new Dictionary<uint, HashSet<Rigidbody>>();
+        private readonly HashSet<uint> _visibilitySaid = new HashSet<uint>();
+
         /// <summary>The gap we last reported per machine, so a CHANGING one is said again.</summary>
         private readonly Dictionary<uint, int> _mismatchSaid = new Dictionary<uint, int>();
 
         public int BodiesSent, BodiesApplied, CountMismatches;
+
+        /// <summary>
+        /// Of the bodies we are placing: how many were drawing already when the
+        /// first pose for them arrived, how many were switched off and we turned
+        /// on, and how many have no renderer under them at all. This is the
+        /// measurement 0.11.7 exists for — see the note in Unpack.
+        /// </summary>
+        public int PlacedAlreadyOnScreen, PlacedSwitchedOn, PlacedNothingToDraw;
         public float LastPacketBytes;
         public float SendRate = 20f;
         public float InterpDelay = 0.1f;
@@ -225,6 +243,71 @@ namespace TcgMultiplayer.Game
                 if (bodies[i] != null && !bodies[i].isKinematic) bodies[i].isKinematic = true;
             _madeKinematic.Add(m.Id);
 
+            // Fifth answer to "the watcher sees nothing happen in the cabinet".
+            //
+            // By 0.11.6 the frames were arriving, being applied, and landing on
+            // bodies that were no longer fighting them — and the tray still did
+            // not move. The owner's log has the pusher doing "Load Objects From
+            // Array" on card insert and "Save Objects To Array" on the way out:
+            // a pusher puts its coins AWAY between rounds. The watcher never
+            // inserts a card, so on its side the coins are still stored — the
+            // Rigidbody is there for the walk to find and for us to move, and
+            // the GameObject it sits on is switched off, so nothing draws.
+            //
+            // So switch on what we have a pose for (and any parent between it
+            // and the machine root, since a whole container can be off), and
+            // COUNT: how many were already drawing, how many we turned on, and
+            // how many have nothing to draw regardless. That's what the panel
+            // line is for. Mostly switched-off means this was the fault. Mostly
+            // already-on-screen and still nothing means the hypothesis is wrong
+            // and the physics path is not where the answer is.
+            //
+            // None of the machine's own logic runs to do this — no event, no
+            // state, just SetActive on the object we're already moving. They
+            // go back exactly as they were on release.
+            HashSet<Rigidbody> counted;
+            if (!_counted.TryGetValue(m.Id, out counted))
+            {
+                counted = new HashSet<Rigidbody>();
+                _counted[m.Id] = counted;
+            }
+            List<GameObject> switchedOn;
+            if (!_switchedOn.TryGetValue(m.Id, out switchedOn))
+            {
+                switchedOn = new List<GameObject>();
+                _switchedOn[m.Id] = switchedOn;
+            }
+            int onScreen = 0, turnedOn = 0, undrawable = 0;
+            for (int i = 0; i < n; i++)
+            {
+                var rb = bodies[i];
+                if (rb == null || !counted.Add(rb)) continue;
+
+                bool wasDrawing = rb.gameObject.activeInHierarchy;
+                var t = rb.transform;
+                while (t != null && t != m.Root)
+                {
+                    if (!t.gameObject.activeSelf)
+                    {
+                        t.gameObject.SetActive(true);
+                        switchedOn.Add(t.gameObject);
+                    }
+                    t = t.parent;
+                }
+
+                if (rb.GetComponentInChildren<Renderer>(true) == null) undrawable++;
+                else if (wasDrawing) onScreen++;
+                else turnedOn++;
+            }
+            PlacedAlreadyOnScreen += onScreen;
+            PlacedSwitchedOn += turnedOn;
+            PlacedNothingToDraw += undrawable;
+
+            if (_visibilitySaid.Add(m.Id))
+                Plugin.Log("Placing " + n + " bodies in " + m.Label + ": " + onScreen + " were already on screen, "
+                           + turnedOn + " were switched off and we turned on"
+                           + (undrawable > 0 ? ", " + undrawable + " have nothing to draw" : "") + ".");
+
             List<Target> targets;
             if (!_targets.TryGetValue(m.Id, out targets))
             {
@@ -302,6 +385,18 @@ namespace TcgMultiplayer.Game
             }
             _targets.Remove(machineId);
             _madeKinematic.Remove(machineId);
+
+            // Whatever we switched on goes back off, newest first, so a parent
+            // we turned on after its child is switched off after it too.
+            List<GameObject> switchedOn;
+            if (_switchedOn.TryGetValue(machineId, out switchedOn))
+            {
+                for (int i = switchedOn.Count - 1; i >= 0; i--)
+                    if (switchedOn[i] != null) switchedOn[i].SetActive(false);
+                _switchedOn.Remove(machineId);
+            }
+            _counted.Remove(machineId);
+            _visibilitySaid.Remove(machineId);
         }
 
         public void ReleaseAll()
