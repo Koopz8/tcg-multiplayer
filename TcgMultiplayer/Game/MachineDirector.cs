@@ -186,6 +186,18 @@ namespace TcgMultiplayer.Game
 
         /// <summary>Machines we have said we are not mirroring. Once each is plenty.</summary>
         private readonly HashSet<uint> _mirrorMuted = new HashSet<uint>();
+
+        /// <summary>
+        /// What the mute is actually swallowing, by FSM and event, so the
+        /// cabinet's screen can be brought back deliberately. The watcher's
+        /// screen sits blank while the owner plays because every event into a
+        /// spectated machine is muted — the round logic and the score display
+        /// live in the same machine. Which FSMs carry the display and which
+        /// spawn the coins is the question this answers; it's logged once per
+        /// distinct FSM+event, capped, and the counts go out on release.
+        /// </summary>
+        private readonly Dictionary<string, int> _mutedByFsm = new Dictionary<string, int>();
+        private const int MutedLogCap = 60;
         private readonly Dictionary<uint, int> _stateLines = new Dictionary<uint, int>();
         private const int MaxStateLinesPerMachine = 90;
 
@@ -1365,6 +1377,15 @@ namespace TcgMultiplayer.Game
                 if (_mirrorMuted.Add(m.Id))
                     Plugin.Log("Not replaying " + m.Label + "'s events — its moving parts are "
                                + "coming over the wire, and running both plays the round twice.");
+
+                string who;
+                try { who = fsm.gameObject.name + " : " + fsm.FsmName + " -> " + evt; }
+                catch { who = "? -> " + evt; }
+                int seen;
+                _mutedByFsm.TryGetValue(who, out seen);
+                _mutedByFsm[who] = seen + 1;
+                if (seen == 0 && _mutedByFsm.Count <= MutedLogCap)
+                    Plugin.Log("Muted on " + m.Label + ": " + who);
                 return;
             }
 

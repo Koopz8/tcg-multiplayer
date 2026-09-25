@@ -19,7 +19,7 @@ namespace TcgMultiplayer.Game
     /// So the owner simulates and everyone else watches: rigidbodies under the
     /// owned machine are snapshotted, quantised and sent; spectators go kinematic
     /// and interpolate. The measured worst case is 100 bodies (Claw Machine Balls)
-    /// and 63-66 coins per pusher — at 14 bytes a body, 20 Hz, that is around
+    /// and 63-66 coins per pusher — at 15 bytes a body, 20 Hz, that is around
     /// 18 KB/s for the busiest machine in the game, and only while someone is
     /// actually playing it.
     ///
@@ -74,7 +74,9 @@ namespace TcgMultiplayer.Game
             public readonly List<Rigidbody> Aligned = new List<Rigidbody>(128);
             public readonly List<Target> Targets = new List<Target>(128);
             public readonly List<Vector3> LastPos = new List<Vector3>(128);
-            public readonly List<GameObject> SwitchedOn = new List<GameObject>();
+            /// <summary>Every object whose active flag we changed, with what it was. Restored on release.</summary>
+            public readonly Dictionary<GameObject, bool> Originals = new Dictionary<GameObject, bool>();
+            public readonly HashSet<Rigidbody> Departed = new HashSet<Rigidbody>();
             public readonly HashSet<Rigidbody> Counted = new HashSet<Rigidbody>();
             public int Matched, Unmatched;
             public bool HaveManifest, VisibilitySaid, RootDescribed;
@@ -246,7 +248,7 @@ namespace TcgMultiplayer.Game
             var origin = m.Root.position;
             var inv = Quaternion.Inverse(m.Root.rotation);
 
-            int size = 4 + _bodies.Count * 14;
+            int size = 4 + _bodies.Count * 15;
             byte[][] keyBytes = null;
             if (manifest)
             {
@@ -290,6 +292,12 @@ namespace TcgMultiplayer.Game
                 }
                 else _lastSentPos.Add(lp);
 
+                // One flag byte per body. Bit 0: is it switched on over there.
+                // A pusher's collected coins fall out of the tray, get counted,
+                // and are put away — and the watcher was drawing every one of
+                // them wherever the owner's copy happened to be lying, which
+                // was all over the arcade floor.
+                buf[o++] = (byte)(rb != null && rb.gameObject.activeInHierarchy ? 1 : 0);
                 WriteI16(buf, ref o, Quant(lp.x, PosScale));
                 WriteI16(buf, ref o, Quant(lp.y, PosScale));
                 WriteI16(buf, ref o, Quant(lp.z, PosScale));
@@ -357,6 +365,14 @@ namespace TcgMultiplayer.Game
                 for (int i = 0; i < _scratch.Count; i++)
                     if (_scratch[i] != null && !_byKey.ContainsKey(_scratchKeys[i])) _byKey[_scratchKeys[i]] = _scratch[i];
 
+                // A body we were driving that the new manifest no longer names
+                // has been destroyed on the owner's side — a coin that fell out
+                // and was collected. Ours has nowhere to go and nothing to
+                // follow, so it goes out of sight until release, rather than
+                // lying wherever the last pose left it.
+                for (int i = 0; i < w.Aligned.Count; i++)
+                    if (w.Aligned[i] != null) w.Departed.Add(w.Aligned[i]);
+
                 w.Aligned.Clear();
                 int matched = 0;
                 string firstMiss = null;
@@ -372,6 +388,12 @@ namespace TcgMultiplayer.Game
                     if (_byKey.TryGetValue(key, out rb)) { w.Aligned.Add(rb); matched++; }
                     else { w.Aligned.Add(null); if (firstMiss == null) firstMiss = key; }
                 }
+                for (int i = 0; i < w.Aligned.Count; i++)
+                    if (w.Aligned[i] != null) w.Departed.Remove(w.Aligned[i]);
+                foreach (var gone in w.Departed)
+                    if (gone != null) SetActiveRemembering(w, gone.gameObject, false);
+                w.Departed.Clear();
+
                 w.HaveManifest = true;
                 w.Matched = matched;
                 w.Unmatched = count - matched;
@@ -399,7 +421,7 @@ namespace TcgMultiplayer.Game
                 return;
             }
             if (w.Aligned.Count != count) return;   // manifest and packet disagree; wait for the next keyframe
-            if (data.Length < o + count * 14) return;
+            if (data.Length < o + count * 15) return;
 
             // 0.11.7's question, still asked: of the bodies we place, were they
             // drawing already? Switch on any that weren't (and any parent up to
@@ -411,14 +433,10 @@ namespace TcgMultiplayer.Game
                 if (rb == null || !w.Counted.Add(rb)) continue;
 
                 bool wasDrawing = rb.gameObject.activeInHierarchy;
-                var t = rb.transform;
+                var t = rb.transform.parent;
                 while (t != null && t != m.Root)
                 {
-                    if (!t.gameObject.activeSelf)
-                    {
-                        t.gameObject.SetActive(true);
-                        w.SwitchedOn.Add(t.gameObject);
-                    }
+                    if (!t.gameObject.activeSelf) SetActiveRemembering(w, t.gameObject, true);
                     t = t.parent;
                 }
 
@@ -444,6 +462,7 @@ namespace TcgMultiplayer.Game
 
             for (int i = 0; i < count; i++)
             {
+                bool on = (data[o++] & 1) != 0;
                 var lp = new Vector3(
                     Dequant(ReadI16(data, ref o), PosScale),
                     Dequant(ReadI16(data, ref o), PosScale),
@@ -463,6 +482,7 @@ namespace TcgMultiplayer.Game
 
                 var rb = w.Aligned[i];
                 if (rb == null) continue;
+                if (rb.gameObject.activeSelf != on) SetActiveRemembering(w, rb.gameObject, on);
 
                 var t = w.Targets[i];
                 t.FromPos = rb.transform.position;
@@ -519,12 +539,18 @@ namespace TcgMultiplayer.Game
             for (int i = 0; i < w.Local.Count; i++)
                 if (w.Local[i] != null) w.Local[i].isKinematic = false;
 
-            // Whatever we switched on goes back off, newest first, so a parent
-            // we turned on after its child is switched off after it too.
-            for (int i = w.SwitchedOn.Count - 1; i >= 0; i--)
-                if (w.SwitchedOn[i] != null) w.SwitchedOn[i].SetActive(false);
+            // Everything we switched on or off goes back exactly as it was.
+            foreach (var kv in w.Originals)
+                if (kv.Key != null) kv.Key.SetActive(kv.Value);
 
             _watched.Remove(machineId);
+        }
+
+        private static void SetActiveRemembering(Watched w, GameObject go, bool on)
+        {
+            if (go == null || go.activeSelf == on) return;
+            if (!w.Originals.ContainsKey(go)) w.Originals[go] = go.activeSelf;
+            go.SetActive(on);
         }
 
         public void ReleaseAll()
