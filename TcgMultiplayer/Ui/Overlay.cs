@@ -467,7 +467,8 @@ namespace TcgMultiplayer.Ui
                 if (_mc.Physics.PacketsReceived > 0)
                     GUILayout.Label("streaming in: " + _mc.Physics.RecvChangedLastPacket + " of "
                                   + _mc.Physics.RecvPosesLastPacket + " poses changed last packet (peak "
-                                  + _mc.Physics.RecvChangedPeak + ", " + _mc.Physics.PacketsReceived + " packets)", _dim);
+                                  + _mc.Physics.RecvChangedPeak + ", " + _mc.Physics.PacketsReceived + " packets"
+                                  + (_mc.Physics.WaitingForManifest > 0 ? ", " + _mc.Physics.WaitingForManifest + " before a manifest" : "") + ")", _dim);
             }
 
             // ---- vehicles -------------------------------------------------

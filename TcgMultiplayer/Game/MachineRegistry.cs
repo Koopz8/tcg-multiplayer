@@ -192,6 +192,18 @@ namespace TcgMultiplayer.Game
             /// player.
             /// </summary>
             public bool Frozen;
+
+            /// <summary>
+            /// Who holds the machine. This was NOT carried over, and that is
+            /// why the physics stream stopped after one packet: a coin pusher
+            /// spawns a batch of coin FSMs on card insert, the registry rebuilt
+            /// two seconds into every round, and the owner got back a Machine
+            /// with OwnedByMe false — so it stopped packing, and the watcher
+            /// sat on a machine nobody owned and never got released either.
+            /// </summary>
+            public ulong Owner;
+            public string OwnerName;
+            public bool OwnedByMe;
         }
 
         private readonly Dictionary<uint, Learned> _learned = new Dictionary<uint, Learned>();
@@ -202,13 +214,16 @@ namespace TcgMultiplayer.Game
             foreach (var kv in _byId)
             {
                 var m = kv.Value;
-                if (m.Body == null && !m.IsMover && !m.Frozen) continue;
+                if (m.Body == null && !m.IsMover && !m.Frozen && m.Owner == 0) continue;
                 _learned[kv.Key] = new Learned
                 {
                     Body = m.Body,
                     BodyUp = m.BodyUp,
                     IsMover = m.IsMover,
                     Frozen = m.Frozen,
+                    Owner = m.Owner,
+                    OwnerName = m.OwnerName,
+                    OwnedByMe = m.OwnedByMe,
                 };
             }
 
@@ -256,6 +271,9 @@ namespace TcgMultiplayer.Game
                 {
                     machine.IsMover = known.IsMover;
                     machine.Frozen = known.Frozen;
+                    machine.Owner = known.Owner;
+                    machine.OwnerName = known.OwnerName;
+                    machine.OwnedByMe = known.OwnedByMe;
                     if (known.Body != null)
                     {
                         machine.Body = known.Body;
