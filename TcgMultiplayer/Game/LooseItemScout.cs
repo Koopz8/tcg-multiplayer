@@ -80,6 +80,13 @@ namespace TcgMultiplayer.Game
                 if (player != null && t.IsChildOf(player)) continue;
                 if (t.root != null && t.root.name.StartsWith("PLAYER Picker", StringComparison.Ordinal)) continue;
 
+                // Only things appearing near the player. The island's litter
+                // — lotto tickets, cans, glowsticks under RANDOMOBJECTS —
+                // streams in by the dozen as districts load, and it ate the
+                // whole budget before the first real ticket came out. A prize
+                // comes out of the machine you're standing at.
+                if (player != null && (t.position - player.position).sqrMagnitude > 15f * 15f) continue;
+
                 if (_logs < LogCap)
                 {
                     _logs++;

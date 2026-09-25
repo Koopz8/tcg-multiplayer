@@ -93,6 +93,9 @@ namespace TcgMultiplayer.Game
             /// prize that then also came out of the owner's machine.
             /// </summary>
             public readonly List<Collider> CollidersOff = new List<Collider>(256);
+            /// <summary>Last walk, by key, to name whatever leaves the machine on OUR side.</summary>
+            public readonly Dictionary<string, Rigidbody> LastLocalByKey = new Dictionary<string, Rigidbody>(256);
+            public int LastLocalCount = -1, DepartureLogs;
             public readonly HashSet<Rigidbody> AlignedSet = new HashSet<Rigidbody>();
             public readonly HashSet<Rigidbody> Counted = new HashSet<Rigidbody>();
             public int Matched, Unmatched;
@@ -110,6 +113,86 @@ namespace TcgMultiplayer.Game
         private readonly List<string> _scratchKeys = new List<string>(128);
         private readonly Dictionary<string, Rigidbody> _byKey = new Dictionary<string, Rigidbody>(1024);
         private readonly HashSet<uint> _describedOwner = new HashSet<uint>();
+
+        /// <summary>
+        /// Bodies that left an OWNED machine's walk — a won prize, a ball that
+        /// went out through the chute. Followed for a while and described,
+        /// because the next thing to build is showing these to other players
+        /// and nobody has looked at what the game does with one yet.
+        /// </summary>
+        private sealed class Departed
+        {
+            public string Key;
+            public Rigidbody Body;
+            public float NextSayAt, StopAt;
+            public string LastSaid;
+        }
+        private readonly List<Departed> _departed = new List<Departed>();
+        private readonly Dictionary<string, Rigidbody> _lastOwnedByKey = new Dictionary<string, Rigidbody>(256);
+        private int _departedLogs;
+
+        private static string Describe(Rigidbody rb)
+        {
+            if (rb == null) return "destroyed";
+            var go = rb.gameObject;
+            string where;
+            try { where = NetId.Path(rb.transform); } catch { where = "?"; }
+            int colsOn = 0;
+            var cols = rb.GetComponentsInChildren<Collider>(true);
+            for (int c = 0; c < cols.Length; c++) if (cols[c] != null && cols[c].enabled) colsOn++;
+            return where + (go.activeInHierarchy ? "" : " (off)") + ", layer " + LayerMask.LayerToName(go.layer)
+                   + ", kinematic=" + rb.isKinematic + ", sleeping=" + rb.IsSleeping()
+                   + ", " + colsOn + "/" + cols.Length + " colliders on, at " + rb.transform.position.ToString("F1");
+        }
+
+        /// <summary>Owner side, every packet: notice what left, and keep an eye on it.</summary>
+        private void TrackDepartures(Machine m)
+        {
+            float now = Time.time;
+            if (_keys.Count == _bodies.Count && _lastOwnedByKey.Count > 0)
+            {
+                var present = new HashSet<string>(_keys);
+                foreach (var kv in _lastOwnedByKey)
+                {
+                    if (present.Contains(kv.Key)) continue;
+                    if (_departedLogs >= 8) break;
+                    _departedLogs++;
+                    _departed.Add(new Departed { Key = kv.Key, Body = kv.Value, NextSayAt = now, StopAt = now + 40f });
+                    Plugin.Log("Left " + m.Label + " (owner): " + kv.Key + " -> " + Describe(kv.Value));
+                }
+            }
+            if (_keys.Count == _bodies.Count)
+            {
+                _lastOwnedByKey.Clear();
+                for (int i = 0; i < _bodies.Count; i++)
+                    if (!_lastOwnedByKey.ContainsKey(_keys[i])) _lastOwnedByKey[_keys[i]] = _bodies[i];
+            }
+            for (int i = _departed.Count - 1; i >= 0; i--)
+            {
+                var d = _departed[i];
+                if (now >= d.StopAt) { _departed.RemoveAt(i); continue; }
+                if (now < d.NextSayAt) continue;
+                d.NextSayAt = now + 2f;
+                if (d.Body == null)
+                {
+                    // The first version trimmed "destroyed" at ", at " and
+                    // threw every frame for the rest of the session — which
+                    // took the whole machines subsystem down with it after six
+                    // frames. A destroyed body is said once and dropped.
+                    Plugin.Log("Departed " + d.Key + ": destroyed.");
+                    _departed.RemoveAt(i);
+                    continue;
+                }
+                var said = Describe(d.Body);
+                // Only when something about it changed — a held ball says the
+                // same thing thirty times otherwise.
+                int at = said.LastIndexOf(", at ", StringComparison.Ordinal);
+                var shape = at > 0 ? said.Substring(0, at) : said;
+                if (shape == d.LastSaid) continue;
+                d.LastSaid = shape;
+                Plugin.Log("Departed " + d.Key + ": " + said);
+            }
+        }
 
         // ------------------------------------------------------------ counters
         public int BodiesSent, BodiesApplied, CountMismatches, ManifestsSent, ManifestsReceived, WaitingForManifest;
@@ -260,6 +343,7 @@ namespace TcgMultiplayer.Game
                 _nextManifestAt = now + ManifestKeyframeEvery;
                 ManifestsSent++;
             }
+            TrackDepartures(m);
             if (newMachine)
             {
                 _lastSentPos.Clear();
@@ -371,6 +455,41 @@ namespace TcgMultiplayer.Game
             // of the round running underneath the one it was being shown. A
             // body we cannot place is better still than moving on its own.
             Gather(m.Root, _scratch, manifest ? _scratchKeys : null);
+
+            // A body leaving OUR walk while we spectate is a fault: nothing
+            // of ours should be running the machine. On the claw, the
+            // watcher's walk went 204 -> 203 the moment the owner won a ball,
+            // and that ball was then a pickup on the watcher's floor. Say
+            // which key went and where the object is now.
+            if (w.LastLocalCount >= 0 && _scratch.Count < w.LastLocalCount && w.DepartureLogs < 6)
+            {
+                if (!manifest) Gather(m.Root, _scratch, _scratchKeys);
+                var present = new HashSet<string>(_scratchKeys);
+                foreach (var kv in w.LastLocalByKey)
+                {
+                    if (present.Contains(kv.Key) || kv.Value == null) continue;
+                    var rb = kv.Value;
+                    var go = rb.gameObject;
+                    string where;
+                    try { where = NetId.Path(rb.transform); } catch { where = "?"; }
+                    int colsOn = 0;
+                    var cols = rb.GetComponentsInChildren<Collider>(true);
+                    for (int c = 0; c < cols.Length; c++) if (cols[c] != null && cols[c].enabled) colsOn++;
+                    w.DepartureLogs++;
+                    Plugin.Log("Left our walk of " + m.Label + ": " + kv.Key + " is now at " + where
+                               + (go.activeInHierarchy ? "" : " (off)") + ", layer " + LayerMask.LayerToName(go.layer)
+                               + ", kinematic=" + rb.isKinematic + ", " + colsOn + " of " + cols.Length + " colliders on.");
+                }
+            }
+            if (manifest || w.LastLocalCount != _scratch.Count)
+            {
+                if (_scratchKeys.Count != _scratch.Count) Gather(m.Root, _scratch, _scratchKeys);
+                w.LastLocalByKey.Clear();
+                for (int i = 0; i < _scratch.Count; i++)
+                    if (!w.LastLocalByKey.ContainsKey(_scratchKeys[i])) w.LastLocalByKey[_scratchKeys[i]] = _scratch[i];
+            }
+            w.LastLocalCount = _scratch.Count;
+
             w.Local.Clear();
             w.Local.AddRange(_scratch);
             for (int i = 0; i < w.Local.Count; i++)
