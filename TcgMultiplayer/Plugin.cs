@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.12.0";
+        public const string Version = "0.12.1";
 
         /// <summary>
         /// When this DLL was written, read off the file itself. Shown in the
@@ -77,6 +77,7 @@ namespace TcgMultiplayer
         private static MelonPreferences_Entry<string> _pToggleKey;
         private static MelonPreferences_Entry<int> _pMaxPlayers;
         private static MelonPreferences_Entry<bool> _pOpenOnStart;
+        private static MelonPreferences_Entry<bool> _pTesterMode;
         private static MelonPreferences_Entry<bool> _pSuppressInput;
         private static MelonPreferences_Entry<float> _pSendRate;
         private static MelonPreferences_Entry<float> _pInterpDelay;
@@ -118,6 +119,9 @@ namespace TcgMultiplayer
                 "Lobby size cap, 2-8. The bandwidth model is designed around 4.");
             _pOpenOnStart = cat.CreateEntry("OpenOverlayOnStart", false, "Open overlay at startup",
                 "Off by default so the game starts the way you expect. Press the toggle key when you want it.");
+            _pTesterMode = cat.CreateEntry("TesterMode", false, "Tester mode",
+                "Shows every counter, the test tools and the diagnostics in the panel. Off is the plain player panel. "
+                + "Also switchable from the bottom of the panel.");
             // Key name kept from when this meant "while the panel is open", so
             // nobody's existing config resets. What it does is narrower now.
             _pSuppressInput = cat.CreateEntry("SuppressGameInputWhileOpen", true, "Suppress game input while typing",
@@ -242,7 +246,8 @@ namespace TcgMultiplayer
             _world = new WorldState(_session);
             _world.Configure(pWorldPrefixes.Value);
             _world.ProtectGuestProgression = _pProtectGuest.Value;
-            _overlay = new Overlay(_session, _avatars, _machines, _world) { Visible = _pOpenOnStart.Value };
+            _overlay = new Overlay(_session, _avatars, _machines, _world) { Visible = _pOpenOnStart.Value, Tester = _pTesterMode.Value };
+            _overlay.OnTesterChanged = on => { _pTesterMode.Value = on; MelonPreferences.Save(); };
 
             // The save is copied aside before anyone connects, and a guest's own
             // progression is stashed and put back around the visit. Both hang off

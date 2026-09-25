@@ -38,6 +38,18 @@ namespace TcgMultiplayer.Ui
         // by default so the panel opens on the four things you actually use.
         private bool _showDiagnostics;
 
+        /// <summary>
+        /// Two panels in one. A player gets: what's going on, host/join, who's
+        /// here, the machines and rides in use, their wallet, their save, the
+        /// monitor. A tester gets all of that plus every counter this was
+        /// built with — the physics and screen streams, local test mode, the
+        /// session report, the self-test, the solo harness. Same DLL, same
+        /// logs; the difference is one switch at the bottom of the panel,
+        /// remembered in the config as TesterMode.
+        /// </summary>
+        public bool Tester;
+        public Action<bool> OnTesterChanged;
+
         public bool Visible;
 
         /// <summary>
@@ -306,7 +318,7 @@ namespace TcgMultiplayer.Ui
             }
 
             // ---- local test mode --------------------------------------------
-            if (Net.LocalTest.Active)
+            if (Net.LocalTest.Active && Tester)
             {
                 GUILayout.Space(6);
                 GUILayout.Label("Local test mode", _head);
@@ -402,11 +414,14 @@ namespace TcgMultiplayer.Ui
             }
 
             // ---- avatars --------------------------------------------------
+            if (Tester)
+            {
             GUILayout.Space(6);
             GUILayout.Label("Avatars", _head);
             GUILayout.Label(_av.DebugLine, _dim);
+            }
 
-            if (_showAdvanced)
+            if (Tester && _showAdvanced)
             {
                 GUILayout.BeginHorizontal();
                 bool mirror = GUILayout.Toggle(_av.MirrorEnabled, "  Mirror me (solo test)", GUILayout.Width(190));
@@ -422,9 +437,9 @@ namespace TcgMultiplayer.Ui
             // ---- machines -------------------------------------------------
             GUILayout.Space(6);
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Machines (" + _mc.MachineCount + ")", _head);
+            GUILayout.Label(Tester ? "Machines (" + _mc.MachineCount + ")" : "Machines", _head);
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Rescan", _btn, GUILayout.Width(64), GUILayout.Height(20))) _mc.RebuildNow();
+            if (Tester && GUILayout.Button("Rescan", _btn, GUILayout.Width(64), GUILayout.Height(20))) _mc.RebuildNow();
             GUILayout.EndHorizontal();
 
             if (_mc.MachineCount == 0)
@@ -445,6 +460,9 @@ namespace TcgMultiplayer.Ui
                     if (++shown >= 6) break;
                 }
                 if (shown == 0) GUILayout.Label("All free.", _dim);
+                if (!Tester && _mc.Physics.SpectatedMachines > 0)
+                    GUILayout.Label("You're watching someone play — walk away to stop.", _dim);
+                if (Tester) {
                 GUILayout.Label("mirrored events: " + _mc.MirroredEventsSent + " sent, "
                               + _mc.MirroredEventsApplied + " applied", _dim);
                 GUILayout.Label("physics: " + _mc.Physics.BodiesSent + " bodies sent, "
@@ -479,6 +497,7 @@ namespace TcgMultiplayer.Ui
                                   + _mc.Physics.RecvPosesLastPacket + " poses changed last packet (peak "
                                   + _mc.Physics.RecvChangedPeak + ", " + _mc.Physics.PacketsReceived + " packets"
                                   + (_mc.Physics.WaitingForManifest > 0 ? ", " + _mc.Physics.WaitingForManifest + " before a manifest" : "") + ")", _dim);
+                }
             }
 
             // ---- vehicles -------------------------------------------------
@@ -533,6 +552,8 @@ namespace TcgMultiplayer.Ui
             GUILayout.Label("Backup: " + SaveGuard.Status, _dim);
             if (GUILayout.Button("Back up my save now", _btn, GUILayout.Height(22))) SaveGuard.Backup();
 
+            if (Tester)
+            {
             // ---- session report ---------------------------------------------
             GUILayout.Space(6);
             GUILayout.Label("Last session report", _head);
@@ -683,6 +704,18 @@ namespace TcgMultiplayer.Ui
 
             if (GUILayout.Button("Release everything (stuck in a machine?)", _btn, GUILayout.Height(22)))
                 _mc.ReleaseEverything();
+            }
+            }   // Tester
+
+            // ---- the switch -------------------------------------------------
+            GUILayout.Space(10);
+            bool tester = GUILayout.Toggle(Tester, Tester
+                ? "  Tester mode — showing everything. Untick for the plain panel."
+                : "  Tester mode — counters, test tools and diagnostics for bug reports");
+            if (tester != Tester)
+            {
+                Tester = tester;
+                if (OnTesterChanged != null) OnTesterChanged(tester);
             }
 
             // The scroll closes here, so the log and the chat box stay pinned to
