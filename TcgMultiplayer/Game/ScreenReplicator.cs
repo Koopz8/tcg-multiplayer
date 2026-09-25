@@ -39,6 +39,18 @@ namespace TcgMultiplayer.Game
             public PropertyInfo Text;
             public string LastSent;
             public bool LastActive;
+            /// <summary>The text's own transform, then its parents up to the machine root.</summary>
+            public Transform[] Chain;
+            public Vector3[] LastPos;
+        }
+
+        private const int MaxChain = 6;
+
+        private static Transform[] ChainOf(Transform t, Transform root)
+        {
+            var list = new List<Transform>(MaxChain);
+            while (t != null && t != root && list.Count < MaxChain) { list.Add(t); t = t.parent; }
+            return list.ToArray();
         }
 
         // ---------------------------------------------------------- owner side
@@ -53,6 +65,7 @@ namespace TcgMultiplayer.Game
             public readonly Dictionary<string, Field> ByKey = new Dictionary<string, Field>();
             public readonly Dictionary<Field, string> OriginalText = new Dictionary<Field, string>();
             public readonly Dictionary<GameObject, bool> OriginalActive = new Dictionary<GameObject, bool>();
+            public readonly Dictionary<Transform, Vector3> OriginalPos = new Dictionary<Transform, Vector3>();
             public float RescanAt;
             public bool Described;
         }
@@ -88,10 +101,10 @@ namespace TcgMultiplayer.Game
         {
             into.Clear();
             if (root == null) return;
-            WalkChildren(root, "", into);
+            WalkChildren(root, root, "", into);
         }
 
-        private static void WalkChildren(Transform parent, string prefix, List<Field> into)
+        private static void WalkChildren(Transform root, Transform parent, string prefix, List<Field> into)
         {
             Dictionary<string, int> seen = parent.childCount > 1 ? new Dictionary<string, int>(parent.childCount) : null;
             for (int i = 0; i < parent.childCount; i++)
@@ -108,9 +121,9 @@ namespace TcgMultiplayer.Game
                     if (comp == null) continue;
                     var pi = TextPropertyOf(comp.GetType());
                     if (pi == null) continue;
-                    into.Add(new Field { Key = key + ":" + comp.GetType().Name, Comp = comp, Text = pi });
+                    into.Add(new Field { Key = key + ":" + comp.GetType().Name, Comp = comp, Text = pi, Chain = ChainOf(t, root) });
                 }
-                if (t.childCount > 0) WalkChildren(t, key + "/", into);
+                if (t.childCount > 0) WalkChildren(root, t, key + "/", into);
             }
         }
 
@@ -172,7 +185,21 @@ namespace TcgMultiplayer.Game
                 if (f.Comp == null) continue;
                 var txt = ReadText(f);
                 bool active = f.Comp.gameObject.activeInHierarchy;
-                if (keyframe || txt != f.LastSent || active != f.LastActive)
+
+                // The score marker on a pusher is a box that slides up a ladder
+                // as the number climbs. Its text mirrored fine and it sat at
+                // the bottom, because the slide is the box's transform, not
+                // its string. So the text's object and its parents go too.
+                bool moved = false;
+                if (f.LastPos == null || f.LastPos.Length != f.Chain.Length) { f.LastPos = new Vector3[f.Chain.Length]; moved = true; }
+                for (int c = 0; c < f.Chain.Length; c++)
+                {
+                    if (f.Chain[c] == null) continue;
+                    var lp = f.Chain[c].localPosition;
+                    if ((lp - f.LastPos[c]).sqrMagnitude > 1e-6f) { f.LastPos[c] = lp; moved = true; }
+                }
+
+                if (keyframe || moved || txt != f.LastSent || active != f.LastActive)
                 {
                     f.LastSent = txt;
                     f.LastActive = active;
@@ -191,6 +218,12 @@ namespace TcgMultiplayer.Game
                 WriteStr(w, f.Key);
                 w.Write((byte)(f.LastActive ? 1 : 0));
                 WriteStr(w, f.LastSent);
+                w.Write((byte)f.Chain.Length);
+                for (int c = 0; c < f.Chain.Length; c++)
+                {
+                    var lp = f.LastPos[c];
+                    w.Write(lp.x); w.Write(lp.y); w.Write(lp.z);
+                }
             }
             Sent += changed.Count;
             return buf.ToArray();
@@ -234,9 +267,20 @@ namespace TcgMultiplayer.Game
                 var key = ReadStr(r);
                 bool active = r.ReadByte() != 0;
                 var txt = ReadStr(r);
+                int chain = r.ReadByte();
+                var pos = new Vector3[chain];
+                for (int c = 0; c < chain; c++) pos[c] = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
 
                 Field f;
                 if (!w.ByKey.TryGetValue(key, out f) || f.Comp == null) { missing++; continue; }
+
+                for (int c = 0; c < chain && c < f.Chain.Length; c++)
+                {
+                    var tr = f.Chain[c];
+                    if (tr == null) continue;
+                    if (!w.OriginalPos.ContainsKey(tr)) w.OriginalPos[tr] = tr.localPosition;
+                    if ((tr.localPosition - pos[c]).sqrMagnitude > 1e-6f) tr.localPosition = pos[c];
+                }
 
                 if (!w.OriginalText.ContainsKey(f)) w.OriginalText[f] = ReadText(f);
                 WriteText(f, txt);
@@ -279,6 +323,8 @@ namespace TcgMultiplayer.Game
                 if (kv.Key.Comp != null) WriteText(kv.Key, kv.Value);
             foreach (var kv in w.OriginalActive)
                 if (kv.Key != null) kv.Key.SetActive(kv.Value);
+            foreach (var kv in w.OriginalPos)
+                if (kv.Key != null) kv.Key.localPosition = kv.Value;
             _watched.Remove(machineId);
         }
 
