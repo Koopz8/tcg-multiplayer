@@ -76,11 +76,24 @@ namespace TcgMultiplayer.Game
             public readonly List<Vector3> LastPos = new List<Vector3>(128);
             /// <summary>Every object whose active flag we changed, with what it was. Restored on release.</summary>
             public readonly Dictionary<GameObject, bool> Originals = new Dictionary<GameObject, bool>();
-            public readonly HashSet<Rigidbody> Departed = new HashSet<Rigidbody>();
+            /// <summary>
+            /// Every body under the root as it was when we started watching:
+            /// where it sat, whether it was kinematic. Put back exactly on
+            /// release, so the watcher's own machine is untouched by having
+            /// been used as a screen for somebody else's round.
+            /// </summary>
+            public readonly Dictionary<Rigidbody, Snapshot> Before = new Dictionary<Rigidbody, Snapshot>();
+            public readonly HashSet<Rigidbody> AlignedSet = new HashSet<Rigidbody>();
             public readonly HashSet<Rigidbody> Counted = new HashSet<Rigidbody>();
             public int Matched, Unmatched;
             public bool HaveManifest, VisibilitySaid, RootDescribed;
             public string LastMismatch;
+        }
+        private struct Snapshot
+        {
+            public Vector3 Pos;
+            public Quaternion Rot;
+            public bool Kinematic;
         }
         private readonly Dictionary<uint, Watched> _watched = new Dictionary<uint, Watched>();
         private readonly List<Rigidbody> _scratch = new List<Rigidbody>(128);
@@ -351,7 +364,13 @@ namespace TcgMultiplayer.Game
             w.Local.Clear();
             w.Local.AddRange(_scratch);
             for (int i = 0; i < w.Local.Count; i++)
-                if (w.Local[i] != null && !w.Local[i].isKinematic) w.Local[i].isKinematic = true;
+            {
+                var rb = w.Local[i];
+                if (rb == null) continue;
+                if (!w.Before.ContainsKey(rb))
+                    w.Before[rb] = new Snapshot { Pos = rb.transform.position, Rot = rb.transform.rotation, Kinematic = rb.isKinematic };
+                if (!rb.isKinematic) rb.isKinematic = true;
+            }
             if (!w.RootDescribed)
             {
                 w.RootDescribed = true;
@@ -364,14 +383,6 @@ namespace TcgMultiplayer.Game
                 _byKey.Clear();
                 for (int i = 0; i < _scratch.Count; i++)
                     if (_scratch[i] != null && !_byKey.ContainsKey(_scratchKeys[i])) _byKey[_scratchKeys[i]] = _scratch[i];
-
-                // A body we were driving that the new manifest no longer names
-                // has been destroyed on the owner's side — a coin that fell out
-                // and was collected. Ours has nowhere to go and nothing to
-                // follow, so it goes out of sight until release, rather than
-                // lying wherever the last pose left it.
-                for (int i = 0; i < w.Aligned.Count; i++)
-                    if (w.Aligned[i] != null) w.Departed.Add(w.Aligned[i]);
 
                 w.Aligned.Clear();
                 int matched = 0;
@@ -388,11 +399,21 @@ namespace TcgMultiplayer.Game
                     if (_byKey.TryGetValue(key, out rb)) { w.Aligned.Add(rb); matched++; }
                     else { w.Aligned.Add(null); if (firstMiss == null) firstMiss = key; }
                 }
+                // The watcher sees the owner's tray and nothing else. A body of
+                // ours the manifest doesn't name — our surplus coins (two saves
+                // hold different amounts), or one we were driving whose owner
+                // copy has since been collected and destroyed — has nothing to
+                // follow, so it goes out of sight until release. Left visible,
+                // the surplus sat frozen wherever the first packet caught them,
+                // including mid-air in the idle machine's attract animation.
+                w.AlignedSet.Clear();
                 for (int i = 0; i < w.Aligned.Count; i++)
-                    if (w.Aligned[i] != null) w.Departed.Remove(w.Aligned[i]);
-                foreach (var gone in w.Departed)
-                    if (gone != null) SetActiveRemembering(w, gone.gameObject, false);
-                w.Departed.Clear();
+                    if (w.Aligned[i] != null) w.AlignedSet.Add(w.Aligned[i]);
+                for (int i = 0; i < w.Local.Count; i++)
+                {
+                    var rb = w.Local[i];
+                    if (rb != null && !w.AlignedSet.Contains(rb)) SetActiveRemembering(w, rb.gameObject, false);
+                }
 
                 w.HaveManifest = true;
                 w.Matched = matched;
@@ -536,12 +557,27 @@ namespace TcgMultiplayer.Game
             Watched w;
             if (!_watched.TryGetValue(machineId, out w)) return;
 
-            for (int i = 0; i < w.Local.Count; i++)
-                if (w.Local[i] != null) w.Local[i].isKinematic = false;
-
             // Everything we switched on or off goes back exactly as it was.
             foreach (var kv in w.Originals)
                 if (kv.Key != null) kv.Key.SetActive(kv.Value);
+
+            // And every body goes back where it was, as it was — not merely
+            // "not kinematic". Some of them were kinematic to begin with, and a
+            // coin we drove around the owner's tray belongs back in ours.
+            foreach (var kv in w.Before)
+            {
+                var rb = kv.Key;
+                if (rb == null) continue;
+                rb.transform.position = kv.Value.Pos;
+                rb.transform.rotation = kv.Value.Rot;
+                rb.isKinematic = kv.Value.Kinematic;
+                if (!kv.Value.Kinematic)
+                {
+                    rb.velocity = Vector3.zero;
+                    rb.angularVelocity = Vector3.zero;
+                    rb.WakeUp();
+                }
+            }
 
             _watched.Remove(machineId);
         }

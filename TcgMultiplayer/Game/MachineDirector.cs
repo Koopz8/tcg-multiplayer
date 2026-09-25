@@ -198,6 +198,12 @@ namespace TcgMultiplayer.Game
         /// </summary>
         private readonly Dictionary<string, int> _mutedByFsm = new Dictionary<string, int>();
         private const int MutedLogCap = 60;
+
+        private static bool IsDisplayFsm(string objectName)
+        {
+            if (string.IsNullOrEmpty(objectName)) return false;
+            return objectName == "LIGHTING" || objectName == "Winning Count CNTRLR";
+        }
         private readonly Dictionary<uint, int> _stateLines = new Dictionary<uint, int>();
         private const int MaxStateLinesPerMachine = 90;
 
@@ -1378,15 +1384,27 @@ namespace TcgMultiplayer.Game
                     Plugin.Log("Not replaying " + m.Label + "'s events — its moving parts are "
                                + "coming over the wire, and running both plays the round twice.");
 
-                string who;
-                try { who = fsm.gameObject.name + " : " + fsm.FsmName + " -> " + evt; }
-                catch { who = "? -> " + evt; }
+                string objName;
+                try { objName = fsm.gameObject.name; } catch { objName = "?"; }
+                string who = objName + " : " + fsm.FsmName + " -> " + evt;
                 int seen;
                 _mutedByFsm.TryGetValue(who, out seen);
                 _mutedByFsm[who] = seen + 1;
-                if (seen == 0 && _mutedByFsm.Count <= MutedLogCap)
-                    Plugin.Log("Muted on " + m.Label + ": " + who);
-                return;
+
+                // The display is allowed through. From the muted list on a
+                // pusher: OBJECTS gets "SANDCASTLE OBJECTS SPAWN", the joystick
+                // controller gets "Play One Credit" and "Start Pressed", and
+                // the coins count themselves — all round logic, all stays out.
+                // The lighting and the winning-count display only ever receive
+                // Reset, Shovel Armed, Flash and HIDE LEADERBOARD. Letting
+                // those two run costs no coins and may bring the screen back.
+                if (!IsDisplayFsm(objName))
+                {
+                    if (seen == 0 && _mutedByFsm.Count <= MutedLogCap)
+                        Plugin.Log("Muted on " + m.Label + ": " + who);
+                    return;
+                }
+                if (seen == 0) Plugin.Log("Let through on " + m.Label + ": " + who);
             }
 
             // Wallets are per-player. Someone else's round must not pay us, so the
