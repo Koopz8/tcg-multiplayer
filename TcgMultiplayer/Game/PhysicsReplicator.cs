@@ -83,6 +83,16 @@ namespace TcgMultiplayer.Game
             /// been used as a screen for somebody else's round.
             /// </summary>
             public readonly Dictionary<Rigidbody, Snapshot> Before = new Dictionary<Rigidbody, Snapshot>();
+            /// <summary>
+            /// Colliders we switched off under the machine, to go back on at
+            /// release. A body we are placing by hand is scenery to the
+            /// watcher — it must not be grabbable, and the watcher's own
+            /// player must not be able to nudge it. On the claw, a ball the
+            /// owner won was driven down the chute into the bin, and until the
+            /// next manifest hid it the watcher could pick it up: a copy of a
+            /// prize that then also came out of the owner's machine.
+            /// </summary>
+            public readonly List<Collider> CollidersOff = new List<Collider>(256);
             public readonly HashSet<Rigidbody> AlignedSet = new HashSet<Rigidbody>();
             public readonly HashSet<Rigidbody> Counted = new HashSet<Rigidbody>();
             public int Matched, Unmatched;
@@ -368,13 +378,27 @@ namespace TcgMultiplayer.Game
                 var rb = w.Local[i];
                 if (rb == null) continue;
                 if (!w.Before.ContainsKey(rb))
+                {
                     w.Before[rb] = new Snapshot { Pos = rb.transform.position, Rot = rb.transform.rotation, Kinematic = rb.isKinematic };
+                    var cols = rb.GetComponentsInChildren<Collider>(true);
+                    for (int c = 0; c < cols.Length; c++)
+                    {
+                        // Only colliders that belong to THIS body — a child
+                        // rigidbody's colliders are its own and get their turn.
+                        if (cols[c] == null || !cols[c].enabled) continue;
+                        if (cols[c].attachedRigidbody != rb) continue;
+                        cols[c].enabled = false;
+                        w.CollidersOff.Add(cols[c]);
+                    }
+                }
                 if (!rb.isKinematic) rb.isKinematic = true;
             }
             if (!w.RootDescribed)
             {
                 w.RootDescribed = true;
                 DescribeRoot(m, _scratch, "Watcher");
+                Plugin.Log("Switched off " + w.CollidersOff.Count + " colliders on " + w.Before.Count + " bodies in " + m.Label
+                           + " while it's being played — they're scenery here until release.");
             }
 
             if (manifest)
@@ -560,6 +584,9 @@ namespace TcgMultiplayer.Game
             // Everything we switched on or off goes back exactly as it was.
             foreach (var kv in w.Originals)
                 if (kv.Key != null) kv.Key.SetActive(kv.Value);
+
+            for (int i = 0; i < w.CollidersOff.Count; i++)
+                if (w.CollidersOff[i] != null) w.CollidersOff[i].enabled = true;
 
             // And every body goes back where it was, as it was — not merely
             // "not kinematic". Some of them were kinematic to begin with, and a
