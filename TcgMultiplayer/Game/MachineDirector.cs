@@ -40,6 +40,7 @@ namespace TcgMultiplayer.Game
         public readonly Rehearsal Rehearse = new Rehearsal();
         public readonly PhysicsReplicator Physics = new PhysicsReplicator();
         public readonly ScreenReplicator Screen = new ScreenReplicator();
+        private readonly LooseItemScout _scout = new LooseItemScout();
 
         /// <summary>Vehicles: the world pose of whatever is being driven.</summary>
         public readonly MoverReplicator Movers = new MoverReplicator();
@@ -325,6 +326,8 @@ namespace TcgMultiplayer.Game
                     }
                 }
             }
+            _scout.Tick(_registry.All, RigSource != null ? RigSource() : null);
+
             if (MyMachine != 0)
             {
                 Machine mine;
