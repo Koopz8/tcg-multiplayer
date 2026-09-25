@@ -39,6 +39,7 @@ namespace TcgMultiplayer.Game
         public readonly WalletGuard Wallet = new WalletGuard();
         public readonly Rehearsal Rehearse = new Rehearsal();
         public readonly PhysicsReplicator Physics = new PhysicsReplicator();
+        public readonly ScreenReplicator Screen = new ScreenReplicator();
 
         /// <summary>Vehicles: the world pose of whatever is being driven.</summary>
         public readonly MoverReplicator Movers = new MoverReplicator();
@@ -94,6 +95,7 @@ namespace TcgMultiplayer.Game
             _session.OnMachineOwner += OnOwnerAnnounced;
             _session.OnMachineEvent += OnMirroredEvent;
             _session.OnMachinePhysics += OnPhysics;
+            _session.OnMachineScreen += OnScreen;
             _session.OnObjectState += OnObjectState;
             _session.OnSeatRequest += OnSeatRequest;
             _session.OnSeatGrant += OnSeatGrant;
@@ -224,7 +226,7 @@ namespace TcgMultiplayer.Game
 
         public void OnSceneChanged()
         {
-            Physics.ReleaseAll();
+            Physics.ReleaseAll(); Screen.ReleaseAll();
             Movers.ReleaseAll();
             Ride.Leave(RigSource != null ? RigSource() : null, "the scene changed");
             _registry.Clear();
@@ -321,6 +323,15 @@ namespace TcgMultiplayer.Game
                         if (_session.State == SessionState.InLobby && _session.Peers.Count > 0)
                             _session.SendMachinePhysics(mine.Id, payload);
                     }
+                }
+            }
+            if (MyMachine != 0)
+            {
+                Machine mine;
+                if (_registry.TryGet(MyMachine, out mine) && mine.OwnedByMe)
+                {
+                    var screen = Screen.Poll(mine);
+                    if (screen != null) _session.SendMachineScreen(mine.Id, screen);
                 }
             }
 
@@ -504,7 +515,7 @@ namespace TcgMultiplayer.Game
             if (m.OwnedByMe)
             {
                 MyMachine = m.Id;
-                Physics.ReleaseMachine(m.Id);
+                Physics.ReleaseMachine(m.Id); Screen.Release(m.Id);
                 Movers.Release(m.Id);            // we drive it now, nobody streams it to us
             }
 
@@ -516,7 +527,7 @@ namespace TcgMultiplayer.Game
             if (owner == 0)
             {
                 Unfreeze(m);
-                Physics.ReleaseMachine(m.Id);    // local simulation resumes
+                Physics.ReleaseMachine(m.Id); Screen.Release(m.Id);    // local simulation resumes
                 Movers.Release(m.Id);
 
                 // Nobody is driving, so nobody is a passenger. Everyone gets put
@@ -672,7 +683,7 @@ namespace TcgMultiplayer.Game
                 m.Seats.Clear();
             }
             MyMachine = 0;
-            Physics.ReleaseAll();
+            Physics.ReleaseAll(); Screen.ReleaseAll();
             Movers.ReleaseAll();
 
             // The panic key has to get you out of a moving vehicle too. Being
@@ -1327,6 +1338,14 @@ namespace TcgMultiplayer.Game
             }
 
             Movers.Push(m, pose);
+        }
+
+        private void OnScreen(CSteamID from, uint machineId, byte[] payload)
+        {
+            Machine m;
+            if (!_registry.TryGet(machineId, out m)) return;
+            if (m.OwnedByMe) return;
+            Screen.Apply(m, payload);
         }
 
         private void OnPhysics(CSteamID from, uint machineId, byte[] payload)

@@ -60,6 +60,8 @@ namespace TcgMultiplayer.Net
         public Action<CSteamID> OnWorldSnapshotRequest;
         /// <summary>Rigidbody poses inside a machine someone else is playing.</summary>
         public Action<CSteamID, uint, byte[]> OnMachinePhysics;
+        /// <summary>What the cabinet's screen says, for a machine someone else is playing.</summary>
+        public Action<CSteamID, uint, byte[]> OnMachineScreen;
         /// <summary>Where a vehicle someone else is driving has got to.</summary>
         public Action<CSteamID, uint, ObjectPose> OnObjectState;
         /// <summary>Host only: someone wants a seat in something, or wants out of it.</summary>
@@ -322,6 +324,20 @@ namespace TcgMultiplayer.Net
                 var bytes = w.ToArray();
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelState, false);
+            }
+        }
+
+        public void SendMachineScreen(uint machineId, byte[] payload)
+        {
+            if (State != SessionState.InLobby || Peers.Count == 0 || payload == null) return;
+            using (var w = new PacketWriter(Op.MachineScreen))
+            {
+                w.U32(machineId).Bytes(payload);
+                var bytes = w.ToArray();
+                // Reliable: a score that skips a beat is fine, a score that
+                // never arrives is a blank screen.
+                foreach (var p in Peers)
+                    _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
             }
         }
 
@@ -919,6 +935,14 @@ namespace TcgMultiplayer.Net
                             uint mid = pr.U32();
                             var payload = pr.Bytes();
                             if (OnMachinePhysics != null) OnMachinePhysics(peer.Id, mid, payload);
+                            break;
+                        }
+
+                        case Op.MachineScreen:
+                        {
+                            uint mid = pr.U32();
+                            var payload = pr.Bytes();
+                            if (OnMachineScreen != null) OnMachineScreen(peer.Id, mid, payload);
                             break;
                         }
 

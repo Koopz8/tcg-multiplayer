@@ -1,0 +1,307 @@
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Text;
+using UnityEngine;
+
+namespace TcgMultiplayer.Game
+{
+    /// <summary>
+    /// The cabinet's screen: the score, the timer, the tickets, the "insert
+    /// card" prompt — every piece of text under the machine root.
+    ///
+    /// Events into a spectated machine are muted (the round logic and the
+    /// display live in the same FSMs, and replaying all of it made the watcher
+    /// play its own round), and letting the two display-looking FSMs through
+    /// changed nothing on the screen: the numbers are written by the coins and
+    /// the joystick controller, which have to stay muted. So this stops
+    /// caring who writes the text and mirrors the text.
+    ///
+    /// The owner walks the machine for text components — UI Text, TextMesh,
+    /// TextMeshPro, anything with a string "text" property, found by
+    /// reflection so no extra assembly is referenced — and sends the ones
+    /// that changed, keyed by path under the root, plus whether the object is
+    /// switched on (menus come and go by SetActive). Everything is sent as a
+    /// keyframe every few seconds for a watcher who walked up late. The
+    /// watcher writes the same strings into its own components by the same
+    /// path and puts every one of them back on release.
+    /// </summary>
+    internal sealed class ScreenReplicator
+    {
+        private const float PollEvery = 0.2f;
+        private const float KeyframeEvery = 5f;
+        private const byte FlagKeyframe = 1;
+
+        private sealed class Field
+        {
+            public string Key;
+            public Component Comp;
+            public PropertyInfo Text;
+            public string LastSent;
+            public bool LastActive;
+        }
+
+        // ---------------------------------------------------------- owner side
+        private readonly List<Field> _mine = new List<Field>(64);
+        private uint _mineMachine;
+        private float _nextPollAt, _nextKeyframeAt, _nextRescanAt;
+        private bool _described;
+
+        // -------------------------------------------------------- watcher side
+        private sealed class Watched
+        {
+            public readonly Dictionary<string, Field> ByKey = new Dictionary<string, Field>();
+            public readonly Dictionary<Field, string> OriginalText = new Dictionary<Field, string>();
+            public readonly Dictionary<GameObject, bool> OriginalActive = new Dictionary<GameObject, bool>();
+            public float RescanAt;
+            public bool Described;
+        }
+        private readonly Dictionary<uint, Watched> _watched = new Dictionary<uint, Watched>();
+
+        public int FieldsFound, Sent, Applied, Unmatched;
+
+        // ---------------------------------------------------------- discovery
+
+        private static readonly Dictionary<Type, PropertyInfo> _textProp = new Dictionary<Type, PropertyInfo>();
+
+        private static PropertyInfo TextPropertyOf(Type t)
+        {
+            PropertyInfo pi;
+            if (_textProp.TryGetValue(t, out pi)) return pi;
+            pi = null;
+            try
+            {
+                // Text, TextMesh, TextMeshPro and TextMeshProUGUI all expose
+                // "text" as a read/write string. Plain Transform, renderers
+                // and the like don't, and are skipped.
+                var p = t.GetProperty("text", BindingFlags.Public | BindingFlags.Instance);
+                if (p != null && p.PropertyType == typeof(string) && p.CanRead && p.CanWrite
+                    && (t.Name.IndexOf("Text", StringComparison.Ordinal) >= 0))
+                    pi = p;
+            }
+            catch { pi = null; }
+            _textProp[t] = pi;
+            return pi;
+        }
+
+        private static void Gather(Transform root, List<Field> into)
+        {
+            into.Clear();
+            if (root == null) return;
+            WalkChildren(root, "", into);
+        }
+
+        private static void WalkChildren(Transform parent, string prefix, List<Field> into)
+        {
+            Dictionary<string, int> seen = parent.childCount > 1 ? new Dictionary<string, int>(parent.childCount) : null;
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                var t = parent.GetChild(i);
+                int n = 0;
+                if (seen != null) { seen.TryGetValue(t.name, out n); seen[t.name] = n + 1; }
+                string key = n == 0 ? prefix + t.name : prefix + t.name + "#" + n;
+
+                var comps = t.GetComponents<Component>();
+                for (int c = 0; c < comps.Length; c++)
+                {
+                    var comp = comps[c];
+                    if (comp == null) continue;
+                    var pi = TextPropertyOf(comp.GetType());
+                    if (pi == null) continue;
+                    into.Add(new Field { Key = key + ":" + comp.GetType().Name, Comp = comp, Text = pi });
+                }
+                if (t.childCount > 0) WalkChildren(t, key + "/", into);
+            }
+        }
+
+        private static string ReadText(Field f)
+        {
+            try { return f.Text.GetValue(f.Comp, null) as string ?? ""; }
+            catch { return ""; }
+        }
+
+        private static void WriteText(Field f, string s)
+        {
+            try { f.Text.SetValue(f.Comp, s, null); } catch { }
+        }
+
+        // -------------------------------------------------------------- owner
+
+        /// <summary>Called every frame while we own a machine; returns a packet when there is something to say.</summary>
+        public byte[] Poll(Machine m)
+        {
+            if (m == null || m.Root == null) return null;
+            float now = Time.time;
+            if (now < _nextPollAt) return null;
+            _nextPollAt = now + PollEvery;
+
+            bool fresh = _mineMachine != m.Id;
+            if (fresh || now >= _nextRescanAt)
+            {
+                // Rescanned with the keyframe: a menu that is instantiated
+                // on card insert isn't there to find before it.
+                _mineMachine = m.Id;
+                _nextRescanAt = now + KeyframeEvery;
+                var before = _mine.Count;
+                Gather(m.Root, _mine);
+                FieldsFound = _mine.Count;
+                if (!_described || _mine.Count != before)
+                {
+                    _described = true;
+                    var sb = new StringBuilder();
+                    sb.Append("Screen of ").Append(m.Label).Append(": ").Append(_mine.Count).Append(" text fields. ");
+                    for (int i = 0; i < _mine.Count && i < 8; i++)
+                    {
+                        var txt = ReadText(_mine[i]);
+                        if (txt.Length > 24) txt = txt.Substring(0, 24) + "…";
+                        sb.Append(_mine[i].Key).Append("=\"").Append(txt.Replace("\n", "\\n")).Append("\" ");
+                    }
+                    Plugin.Log(sb.ToString());
+                }
+                fresh = true;
+            }
+            if (_mine.Count == 0) return null;
+
+            bool keyframe = fresh || now >= _nextKeyframeAt;
+            if (keyframe) _nextKeyframeAt = now + KeyframeEvery;
+
+            var changed = new List<Field>();
+            for (int i = 0; i < _mine.Count; i++)
+            {
+                var f = _mine[i];
+                if (f.Comp == null) continue;
+                var txt = ReadText(f);
+                bool active = f.Comp.gameObject.activeInHierarchy;
+                if (keyframe || txt != f.LastSent || active != f.LastActive)
+                {
+                    f.LastSent = txt;
+                    f.LastActive = active;
+                    changed.Add(f);
+                }
+            }
+            if (changed.Count == 0) return null;
+
+            var buf = new System.IO.MemoryStream(256);
+            var w = new System.IO.BinaryWriter(buf, Encoding.UTF8);
+            w.Write((byte)(keyframe ? FlagKeyframe : 0));
+            w.Write((ushort)changed.Count);
+            for (int i = 0; i < changed.Count; i++)
+            {
+                var f = changed[i];
+                WriteStr(w, f.Key);
+                w.Write((byte)(f.LastActive ? 1 : 0));
+                WriteStr(w, f.LastSent);
+            }
+            Sent += changed.Count;
+            return buf.ToArray();
+        }
+
+        // ------------------------------------------------------------ watcher
+
+        public void Apply(Machine m, byte[] data)
+        {
+            if (m == null || m.Root == null || data == null || data.Length < 3) return;
+            float now = Time.time;
+
+            Watched w;
+            if (!_watched.TryGetValue(m.Id, out w))
+            {
+                w = new Watched();
+                _watched[m.Id] = w;
+            }
+
+            var r = new System.IO.BinaryReader(new System.IO.MemoryStream(data), Encoding.UTF8);
+            bool keyframe = (r.ReadByte() & FlagKeyframe) != 0;
+            int count = r.ReadUInt16();
+
+            if (keyframe || now >= w.RescanAt || w.ByKey.Count == 0)
+            {
+                w.RescanAt = now + KeyframeEvery;
+                var found = new List<Field>();
+                Gather(m.Root, found);
+                for (int i = 0; i < found.Count; i++)
+                    if (!w.ByKey.ContainsKey(found[i].Key)) w.ByKey[found[i].Key] = found[i];
+                if (!w.Described)
+                {
+                    w.Described = true;
+                    Plugin.Log("Screen of " + m.Label + " here: " + found.Count + " text fields to write into.");
+                }
+            }
+
+            int applied = 0, missing = 0;
+            for (int i = 0; i < count; i++)
+            {
+                var key = ReadStr(r);
+                bool active = r.ReadByte() != 0;
+                var txt = ReadStr(r);
+
+                Field f;
+                if (!w.ByKey.TryGetValue(key, out f) || f.Comp == null) { missing++; continue; }
+
+                if (!w.OriginalText.ContainsKey(f)) w.OriginalText[f] = ReadText(f);
+                WriteText(f, txt);
+
+                // Menus are shown and hidden by switching their objects on and
+                // off. Follow the text's own object; when it's on, also turn on
+                // any parent up to the root that's off. Only walk up when
+                // turning things ON — a hidden menu is hidden at one level, and
+                // switching every ancestor off would take the whole cabinet.
+                var own = f.Comp.gameObject;
+                if (own.activeSelf != active) SetActiveRemembering(w, own, active);
+                if (active)
+                {
+                    var t = f.Comp.transform.parent;
+                    while (t != null && t != m.Root)
+                    {
+                        if (!t.gameObject.activeSelf) SetActiveRemembering(w, t.gameObject, true);
+                        t = t.parent;
+                    }
+                }
+                applied++;
+            }
+            Applied += applied;
+            Unmatched += missing;
+        }
+
+        private static void SetActiveRemembering(Watched w, GameObject go, bool on)
+        {
+            if (go == null || go.activeSelf == on) return;
+            if (!w.OriginalActive.ContainsKey(go)) w.OriginalActive[go] = go.activeSelf;
+            go.SetActive(on);
+        }
+
+        /// <summary>Puts every string and every switch back the way the watcher had it.</summary>
+        public void Release(uint machineId)
+        {
+            Watched w;
+            if (!_watched.TryGetValue(machineId, out w)) return;
+            foreach (var kv in w.OriginalText)
+                if (kv.Key.Comp != null) WriteText(kv.Key, kv.Value);
+            foreach (var kv in w.OriginalActive)
+                if (kv.Key != null) kv.Key.SetActive(kv.Value);
+            _watched.Remove(machineId);
+        }
+
+        public void ReleaseAll()
+        {
+            var ids = new List<uint>(_watched.Keys);
+            foreach (var id in ids) Release(id);
+        }
+
+        // ------------------------------------------------------------ strings
+
+        private static void WriteStr(System.IO.BinaryWriter w, string s)
+        {
+            var b = Encoding.UTF8.GetBytes(s ?? "");
+            if (b.Length > ushort.MaxValue) b = Encoding.UTF8.GetBytes((s ?? "").Substring(0, 1024));
+            w.Write((ushort)b.Length);
+            w.Write(b);
+        }
+
+        private static string ReadStr(System.IO.BinaryReader r)
+        {
+            int n = r.ReadUInt16();
+            return n == 0 ? "" : Encoding.UTF8.GetString(r.ReadBytes(n));
+        }
+    }
+}

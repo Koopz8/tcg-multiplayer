@@ -23,6 +23,7 @@ namespace TcgMultiplayer.Net
         ObjectState = 15,  // owner -> everyone: a vehicle's world pose, so it actually drives
         SeatRequest = 16,  // client -> host: let me ride in / get out of this thing
         SeatGrant = 17,    // host -> all: who is sitting where
+        MachineScreen = 18, // owner -> spectators: the cabinet's text, as strings
     }
 
     /// <summary>
