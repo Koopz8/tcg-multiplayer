@@ -44,7 +44,7 @@ namespace TcgMultiplayer.Game
             return clone;
         }
 
-        private static int Strip(GameObject root)
+        internal static int Strip(GameObject root)
         {
             int removed = 0;
 

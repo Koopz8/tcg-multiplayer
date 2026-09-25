@@ -24,6 +24,7 @@ namespace TcgMultiplayer.Net
         SeatRequest = 16,  // client -> host: let me ride in / get out of this thing
         SeatGrant = 17,    // host -> all: who is sitting where
         MachineScreen = 18, // owner -> spectators: the cabinet's text, as strings
+        LooseItem = 19,    // anyone -> everyone: a ticket pile or prize on the floor near me
     }
 
     /// <summary>

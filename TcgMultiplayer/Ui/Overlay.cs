@@ -470,6 +470,10 @@ namespace TcgMultiplayer.Ui
                                   + (_mc.Screen.Unmatched > 0 ? ", " + _mc.Screen.Unmatched + " with nowhere to go" : "")
                                   + (_mc.Screen.Moves > 0 ? ", " + _mc.Screen.Moves + " moves" : "")
                                   + (_mc.Screen.MovesOverridden > 0 ? ", " + _mc.Screen.MovesOverridden + " moved back by something here" : ""), _dim);
+                if (_mc.Items.Tracked + _mc.Items.Shown + _mc.Items.Spawned > 0)
+                    GUILayout.Label("loose items: " + _mc.Items.Tracked + " of mine tracked, " + _mc.Items.Shown
+                                  + " of theirs shown"
+                                  + (_mc.Items.PrefabMisses > 0 ? ", " + _mc.Items.PrefabMisses + " with no prefab to show" : ""), _dim);
                 if (_mc.Physics.PacketsReceived > 0)
                     GUILayout.Label("streaming in: " + _mc.Physics.RecvChangedLastPacket + " of "
                                   + _mc.Physics.RecvPosesLastPacket + " poses changed last packet (peak "

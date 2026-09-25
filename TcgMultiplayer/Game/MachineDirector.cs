@@ -40,7 +40,7 @@ namespace TcgMultiplayer.Game
         public readonly Rehearsal Rehearse = new Rehearsal();
         public readonly PhysicsReplicator Physics = new PhysicsReplicator();
         public readonly ScreenReplicator Screen = new ScreenReplicator();
-        private readonly LooseItemScout _scout = new LooseItemScout();
+        public readonly LooseItems Items = new LooseItems();
 
         /// <summary>Vehicles: the world pose of whatever is being driven.</summary>
         public readonly MoverReplicator Movers = new MoverReplicator();
@@ -97,6 +97,9 @@ namespace TcgMultiplayer.Game
             _session.OnMachineEvent += OnMirroredEvent;
             _session.OnMachinePhysics += OnPhysics;
             _session.OnMachineScreen += OnScreen;
+            _session.OnLooseItem += (from, payload) => Items.Receive(from.m_SteamID, payload);
+            _session.OnPeerGone += peer => Items.ForgetPeer(peer.m_SteamID);
+            Items.Send = (reliable, payload) => _session.SendLooseItem(payload, reliable);
             _session.OnObjectState += OnObjectState;
             _session.OnSeatRequest += OnSeatRequest;
             _session.OnSeatGrant += OnSeatGrant;
@@ -227,7 +230,7 @@ namespace TcgMultiplayer.Game
 
         public void OnSceneChanged()
         {
-            _scout.Reset();
+            Items.Reset();
             Physics.ReleaseAll(); Screen.ReleaseAll();
             Movers.ReleaseAll();
             Ride.Leave(RigSource != null ? RigSource() : null, "the scene changed");
@@ -327,7 +330,8 @@ namespace TcgMultiplayer.Game
                     }
                 }
             }
-            _scout.Tick(_registry.All, RigSource != null ? RigSource() : null);
+            Items.TickOwner(_registry.All, RigSource != null ? RigSource() : null, _session.SelfId.m_SteamID);
+            Items.Render();
 
             if (MyMachine != 0)
             {

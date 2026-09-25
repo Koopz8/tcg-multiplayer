@@ -62,6 +62,8 @@ namespace TcgMultiplayer.Net
         public Action<CSteamID, uint, byte[]> OnMachinePhysics;
         /// <summary>What the cabinet's screen says, for a machine someone else is playing.</summary>
         public Action<CSteamID, uint, byte[]> OnMachineScreen;
+        /// <summary>A loose item (tickets, a prize) appearing, moving or vanishing near a peer.</summary>
+        public Action<CSteamID, byte[]> OnLooseItem;
         /// <summary>Where a vehicle someone else is driving has got to.</summary>
         public Action<CSteamID, uint, ObjectPose> OnObjectState;
         /// <summary>Host only: someone wants a seat in something, or wants out of it.</summary>
@@ -338,6 +340,18 @@ namespace TcgMultiplayer.Net
                 // never arrives is a blank screen.
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
+            }
+        }
+
+        public void SendLooseItem(byte[] payload, bool reliable)
+        {
+            if (State != SessionState.InLobby || Peers.Count == 0 || payload == null) return;
+            using (var w = new PacketWriter(Op.LooseItem))
+            {
+                w.Bytes(payload);
+                var bytes = w.ToArray();
+                foreach (var p in Peers)
+                    _net.Send(p.Id, bytes, reliable ? SteamTransport.ChannelControl : SteamTransport.ChannelState, reliable);
             }
         }
 
@@ -943,6 +957,13 @@ namespace TcgMultiplayer.Net
                             uint mid = pr.U32();
                             var payload = pr.Bytes();
                             if (OnMachineScreen != null) OnMachineScreen(peer.Id, mid, payload);
+                            break;
+                        }
+
+                        case Op.LooseItem:
+                        {
+                            var payload = pr.Bytes();
+                            if (OnLooseItem != null) OnLooseItem(peer.Id, payload);
                             break;
                         }
 
