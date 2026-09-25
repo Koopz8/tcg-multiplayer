@@ -75,6 +75,51 @@ namespace TcgMultiplayer.Game
         /// measurement 0.11.7 exists for — see the note in Unpack.
         /// </summary>
         public int PlacedAlreadyOnScreen, PlacedSwitchedOn, PlacedNothingToDraw;
+
+        /// <summary>
+        /// Is the stream actually carrying motion? Sender side: of the bodies in
+        /// the last packet, how many had moved more than a millimetre since the
+        /// packet before. Receiver side: of the poses in the last packet, how
+        /// many differed from the previous packet's. A pusher being played has
+        /// dozens of coins on the move every frame; a stream that says 0 here
+        /// while someone plays is a stream of furniture, and the coins live
+        /// somewhere the walk doesn't reach.
+        /// </summary>
+        public int SentMovedLastPacket, SentBodiesLastPacket, PacketsSent;
+        public int RecvChangedLastPacket, RecvPosesLastPacket, PacketsReceived;
+        public int SentMovedPeak, RecvChangedPeak;
+
+        private readonly List<Vector3> _lastSentPos = new List<Vector3>(128);
+        private uint _lastSentMachine;
+        private readonly Dictionary<uint, List<Vector3>> _lastRecvPos = new Dictionary<uint, List<Vector3>>();
+        private readonly HashSet<uint> _describedRoot = new HashSet<uint>();
+        private float _nextSendSummaryAt, _nextRecvSummaryAt;
+
+        /// <summary>
+        /// One line per machine per session about what the walk actually found
+        /// under its root: each top-level child, how many rigidbodies it holds,
+        /// and the first few bodies by name. Said on both ends, because whether
+        /// the two walks are looking at the same objects is the whole question.
+        /// </summary>
+        private void DescribeRoot(Machine m, List<Rigidbody> bodies, string side)
+        {
+            if (!_describedRoot.Add(m.Id)) return;
+            var sb = new System.Text.StringBuilder();
+            sb.Append(side).Append(" walk of ").Append(m.Label).Append(": ").Append(bodies.Count).Append(" bodies. ");
+            for (int i = 0; i < m.Root.childCount; i++)
+            {
+                var c = m.Root.GetChild(i);
+                int count = 0;
+                for (int j = 0; j < bodies.Count; j++)
+                    if (bodies[j] != null && bodies[j].transform.IsChildOf(c)) count++;
+                if (count == 0) continue;
+                sb.Append(c.name).Append(c.gameObject.activeInHierarchy ? "" : " (off)").Append('=').Append(count).Append("  ");
+            }
+            sb.Append("First: ");
+            for (int i = 0; i < bodies.Count && i < 6; i++)
+                if (bodies[i] != null) sb.Append(bodies[i].name).Append(bodies[i].isKinematic ? "[k] " : " ");
+            Plugin.Log(sb.ToString());
+        }
         public float LastPacketBytes;
         public float SendRate = 20f;
         public float InterpDelay = 0.1f;
@@ -126,9 +171,13 @@ namespace TcgMultiplayer.Game
             if (m == null || m.Root == null) return null;
             Gather(m.Root, _bodies);
             if (_bodies.Count == 0) return null;
+            DescribeRoot(m, _bodies, "Owner");
 
             var origin = m.Root.position;
             var inv = Quaternion.Inverse(m.Root.rotation);
+
+            if (_lastSentMachine != m.Id) { _lastSentPos.Clear(); _lastSentMachine = m.Id; }
+            int moved = 0;
 
             var buf = new byte[4 + _bodies.Count * 14];
             int o = 0;
@@ -145,6 +194,12 @@ namespace TcgMultiplayer.Game
                     lp = inv * (rb.transform.position - origin);
                     lr = inv * rb.transform.rotation;
                 }
+                if (i < _lastSentPos.Count)
+                {
+                    if ((lp - _lastSentPos[i]).sqrMagnitude > 0.001f * 0.001f) moved++;
+                    _lastSentPos[i] = lp;
+                }
+                else _lastSentPos.Add(lp);
 
                 WriteI16(buf, ref o, Quant(lp.x, PosScale));
                 WriteI16(buf, ref o, Quant(lp.y, PosScale));
@@ -157,6 +212,17 @@ namespace TcgMultiplayer.Game
 
             BodiesSent += _bodies.Count;
             LastPacketBytes = buf.Length;
+            PacketsSent++;
+            SentBodiesLastPacket = _bodies.Count;
+            SentMovedLastPacket = moved;
+            if (moved > SentMovedPeak) SentMovedPeak = moved;
+            float now = Time.time;
+            if (now >= _nextSendSummaryAt)
+            {
+                _nextSendSummaryAt = now + 5f;
+                Plugin.Log("Streaming " + m.Label + ": " + moved + " of " + _bodies.Count
+                           + " bodies moved in the last packet (peak " + SentMovedPeak + ", " + PacketsSent + " packets).");
+            }
             return buf;
         }
 
@@ -178,6 +244,15 @@ namespace TcgMultiplayer.Game
                 _spectated[m.Id] = bodies;
             }
             Gather(m.Root, _scratch);
+            DescribeRoot(m, _scratch, "Watcher");
+
+            List<Vector3> lastRecv;
+            if (!_lastRecvPos.TryGetValue(m.Id, out lastRecv))
+            {
+                lastRecv = new List<Vector3>(count);
+                _lastRecvPos[m.Id] = lastRecv;
+            }
+            int changed = 0;
 
             // The two sides rarely agree about how many things are inside a
             // machine, and the original answer to that was to throw the whole
@@ -334,6 +409,13 @@ namespace TcgMultiplayer.Game
                     Dequant(ReadI16(data, ref o), RotScale),
                     Dequant(ReadI16(data, ref o), RotScale));
 
+                if (i < lastRecv.Count)
+                {
+                    if ((lp - lastRecv[i]).sqrMagnitude > 0.001f * 0.001f) changed++;
+                    lastRecv[i] = lp;
+                }
+                else lastRecv.Add(lp);
+
                 if (i >= n) continue;
 
                 var t = targets[i];
@@ -346,6 +428,17 @@ namespace TcgMultiplayer.Game
             }
 
             BodiesApplied += n;
+            PacketsReceived++;
+            RecvPosesLastPacket = count;
+            RecvChangedLastPacket = changed;
+            if (changed > RecvChangedPeak) RecvChangedPeak = changed;
+            if (now >= _nextRecvSummaryAt)
+            {
+                _nextRecvSummaryAt = now + 5f;
+                Plugin.Log("Watching " + m.Label + ": " + changed + " of " + count
+                           + " incoming poses changed in the last packet (peak " + RecvChangedPeak + ", "
+                           + PacketsReceived + " packets, placing " + n + ").");
+            }
         }
 
         /// <summary>Eases each body toward its last received pose; called every frame.</summary>
@@ -397,6 +490,7 @@ namespace TcgMultiplayer.Game
             }
             _counted.Remove(machineId);
             _visibilitySaid.Remove(machineId);
+            _lastRecvPos.Remove(machineId);
         }
 
         public void ReleaseAll()

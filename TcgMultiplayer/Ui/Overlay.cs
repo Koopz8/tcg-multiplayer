@@ -460,6 +460,14 @@ namespace TcgMultiplayer.Ui
                                   + " were switched off and we turned on"
                                   + (_mc.Physics.PlacedNothingToDraw > 0
                                      ? ", " + _mc.Physics.PlacedNothingToDraw + " have nothing to draw" : ""), _dim);
+                if (_mc.Physics.PacketsSent > 0)
+                    GUILayout.Label("streaming out: " + _mc.Physics.SentMovedLastPacket + " of "
+                                  + _mc.Physics.SentBodiesLastPacket + " bodies moved last packet (peak "
+                                  + _mc.Physics.SentMovedPeak + ", " + _mc.Physics.PacketsSent + " packets)", _dim);
+                if (_mc.Physics.PacketsReceived > 0)
+                    GUILayout.Label("streaming in: " + _mc.Physics.RecvChangedLastPacket + " of "
+                                  + _mc.Physics.RecvPosesLastPacket + " poses changed last packet (peak "
+                                  + _mc.Physics.RecvChangedPeak + ", " + _mc.Physics.PacketsReceived + " packets)", _dim);
             }
 
             // ---- vehicles -------------------------------------------------
