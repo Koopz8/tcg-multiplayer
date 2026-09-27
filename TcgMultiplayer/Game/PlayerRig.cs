@@ -37,6 +37,38 @@ namespace TcgMultiplayer.Game
         private float _lastYaw;
         private float _turnRate;
 
+        private float _nextMeshWarnAt;
+
+        /// <summary>
+        /// The player's body under PLAYER. It was looked up by the name
+        /// "LARRY Mesh", which is what it's called when you play as Larry —
+        /// and the first two people to try the mod in the wild weren't
+        /// playing as Larry. They connected fine, handshaked, mirrored a
+        /// hundred events, and never saw each other, because neither side
+        /// could find a body to clone. So: the exact name first, then any
+        /// child called "<something> Mesh", then any child with an Animator
+        /// and a skinned mesh under it, which is what a character is.
+        /// </summary>
+        private static Transform FindMesh(Transform root)
+        {
+            var exact = root.Find(MeshChild);
+            if (exact != null) return exact;
+
+            for (int i = 0; i < root.childCount; i++)
+            {
+                var c = root.GetChild(i);
+                if (c.name.EndsWith(" Mesh", StringComparison.OrdinalIgnoreCase)
+                    && c.GetComponentInChildren<SkinnedMeshRenderer>(true) != null) return c;
+            }
+            for (int i = 0; i < root.childCount; i++)
+            {
+                var c = root.GetChild(i);
+                if (c.GetComponent<Animator>() != null
+                    && c.GetComponentInChildren<SkinnedMeshRenderer>(true) != null) return c;
+            }
+            return null;
+        }
+
         public bool Acquire()
         {
             if (Valid) return true;
@@ -45,21 +77,33 @@ namespace TcgMultiplayer.Game
             if (root == null) return false;
 
             Root = root.transform;
-            Mesh = Root.Find(MeshChild);
+            Mesh = FindMesh(Root);
             Cam = Root.Find(CameraChild);
 
             if (Mesh == null)
             {
-                Plugin.Warn("Found PLAYER but no '" + MeshChild + "' child — avatar cloning will not work.");
+                // Said once a minute, not once a second, and with the children
+                // listed — the first bug report from the wild was 547 copies of
+                // this line and nothing to go on.
+                if (Time.time >= _nextMeshWarnAt)
+                {
+                    _nextMeshWarnAt = Time.time + 60f;
+                    var sb = new System.Text.StringBuilder();
+                    for (int i = 0; i < Root.childCount; i++) sb.Append(i > 0 ? ", " : "").Append(Root.GetChild(i).name);
+                    Plugin.Warn("Found PLAYER but no character mesh under it — avatar cloning will not work. "
+                                + "Children: " + sb);
+                }
                 return false;
             }
+            if (Mesh.name != MeshChild)
+                Plugin.Log("Player mesh is '" + Mesh.name + "' (not '" + MeshChild + "') — a different character; using it.");
 
             ProbeController();
             _lastPos = Mesh.position;
             _lastPosTime = Time.time;
             _lastYaw = Mesh.eulerAngles.y;
             Plugin.Log("Player rig acquired" + (_controller != null ? " (with movement controller)" : " (transform only)"));
-            CompatCheck.Set("player rig (" + RootPath + "/" + MeshChild + ")", true, null);
+            CompatCheck.Set("player rig (" + RootPath + "/" + Mesh.name + ")", true, null);
             CompatCheck.Set("movement controller", _controller != null,
                             _controller == null ? "falling back to transform deltas" : null);
             return true;
