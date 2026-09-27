@@ -14,7 +14,8 @@ unofficial fan mod, nothing to do with devotid. everyone needs their own copy of
 [*]tickets and prizes a friend wins show up on the floor for everyone. only they can pick them up.
 [*]everyone keeps their own money, tickets, prizes and inventory. watching a friend win doesn't pay you.
 [*]unlocks, doors and vehicles are shared while you play together.
-[*]ride along in a car a friend is driving (F7).
+[*]vehicles actually drive for everyone. ride along in a car a friend is driving (F7).
+[*]monitor picker - the game has no setting for which screen it opens on, so the F9 panel has one. pick a monitor, tell it to remember, done. F8 cycles.
 [/list]
 
 [size=4][b]installing[/b][/size]
