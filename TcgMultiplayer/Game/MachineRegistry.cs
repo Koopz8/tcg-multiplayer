@@ -41,6 +41,16 @@ namespace TcgMultiplayer.Game
         public bool Frozen;
 
         /// <summary>
+        /// Whether anything under this machine's root has a rigidbody — a
+        /// pusher's coins, a claw's balls. Worked out once, the first time
+        /// someone else takes the machine, and it decides whether their events
+        /// are replayed here: a machine with bodies is shown by streaming
+        /// those bodies, and replaying its events as well makes the watcher
+        /// run its own round underneath (0.11.6). -1 = not looked yet.
+        /// </summary>
+        public int BodyCount = -1;
+
+        /// <summary>
         /// Does this thing travel? Worked out by watching it, not from a list of
         /// names — see MoverTrack. A mover has its world pose streamed by
         /// whoever is driving, and can be ridden in.
@@ -204,6 +214,7 @@ namespace TcgMultiplayer.Game
             public ulong Owner;
             public string OwnerName;
             public bool OwnedByMe;
+            public int BodyCount;
         }
 
         private readonly Dictionary<uint, Learned> _learned = new Dictionary<uint, Learned>();
@@ -214,7 +225,7 @@ namespace TcgMultiplayer.Game
             foreach (var kv in _byId)
             {
                 var m = kv.Value;
-                if (m.Body == null && !m.IsMover && !m.Frozen && m.Owner == 0) continue;
+                if (m.Body == null && !m.IsMover && !m.Frozen && m.Owner == 0 && m.BodyCount < 0) continue;
                 _learned[kv.Key] = new Learned
                 {
                     Body = m.Body,
@@ -224,6 +235,7 @@ namespace TcgMultiplayer.Game
                     Owner = m.Owner,
                     OwnerName = m.OwnerName,
                     OwnedByMe = m.OwnedByMe,
+                    BodyCount = m.BodyCount,
                 };
             }
 
@@ -274,6 +286,7 @@ namespace TcgMultiplayer.Game
                     machine.Owner = known.Owner;
                     machine.OwnerName = known.OwnerName;
                     machine.OwnedByMe = known.OwnedByMe;
+                    machine.BodyCount = known.BodyCount;
                     if (known.Body != null)
                     {
                         machine.Body = known.Body;

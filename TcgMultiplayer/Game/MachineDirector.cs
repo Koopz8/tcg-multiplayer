@@ -1411,11 +1411,26 @@ namespace TcgMultiplayer.Game
             // wins. It costs the cabinet's lights and screen on a pusher, which
             // is a real loss and a smaller one than a machine quietly filling up
             // with coins nobody can ever collect.
-            if (Physics.IsSpectating(m.Id))
+            // Muted from the FIRST event, not from the first physics packet.
+            // Events ride the reliable channel and poses the unreliable one,
+            // so "Card Inserted -> Load Objects From Array" reached the watcher
+            // a third of a second before the first pose did — and in that gap
+            // it replayed, and the watcher's machine loaded its own saved coin
+            // set on top of what it had. Three spectated rounds later that
+            // pusher held 986 bodies to the owner's 334. So: someone else owns
+            // it and it has bodies under it, its events stay out.
+            if (m.BodyCount < 0 && m.Root != null)
+            {
+                var tmp = new List<Rigidbody>(64);
+                PhysicsReplicator.Gather(m.Root, tmp, null);
+                m.BodyCount = tmp.Count;
+            }
+            if (Physics.IsSpectating(m.Id) || (m.Owner != 0 && !m.OwnedByMe && m.BodyCount > 0))
             {
                 if (_mirrorMuted.Add(m.Id))
-                    Plugin.Log("Not replaying " + m.Label + "'s events — its moving parts are "
-                               + "coming over the wire, and running both plays the round twice.");
+                    Plugin.Log("Not replaying " + m.Label + "'s events — its moving parts "
+                               + (Physics.IsSpectating(m.Id) ? "are coming" : "will come")
+                               + " over the wire, and running both plays the round twice.");
 
                 string objName;
                 try { objName = fsm.gameObject.name; } catch { objName = "?"; }

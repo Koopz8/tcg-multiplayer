@@ -468,6 +468,7 @@ namespace TcgMultiplayer.Game
                 foreach (var kv in w.LastLocalByKey)
                 {
                     if (present.Contains(kv.Key) || kv.Value == null) continue;
+                    if (w.DepartureLogs >= 6) break;
                     var rb = kv.Value;
                     var go = rb.gameObject;
                     string where;
