@@ -1,6 +1,6 @@
 THE COIN GAME - MULTIPLAYER
 ===========================
-version 0.9.8  (public beta)
+version 0.12.3  (public beta)
 
 Play The Coin Game with friends. You share an island, take turns on the
 machines, watch each other play, and keep your own money.
@@ -88,6 +88,14 @@ Press F9 to open the panel.
 
 Your friend can also join from Steam directly - right-click you in the
 friends list, Join Game.
+
+Walk up to a machine somebody else is playing and you can watch it: the
+coins, the claw and the score on the cabinet screen all move live. When a
+machine pays out, the tickets or the prize on the floor are visible to
+everyone. You can't grab someone else's.
+
+The panel shows the basics. Tick "Tester mode" at the bottom of it if
+you're going to send a bug report - it adds the numbers I need.
 
 Everyone must be running the same version of the mod. The mod checks and
 will refuse to connect if you aren't, telling you which version each of you

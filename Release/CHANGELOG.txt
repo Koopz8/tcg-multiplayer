@@ -1,6 +1,33 @@
 CHANGELOG
 =========
 
+0.12.3
+------
+* Watching a friend play a cabinet actually works now. On coin pushers and
+  claw machines the coins, chests, the arm and the claw move on your screen
+  the way they move on theirs, the cabinet screen shows their live score
+  and timer, and the machine goes back to normal when they walk away. This
+  was very broken before - most of the time nothing moved at all.
+* Tickets and prizes show up for everyone. When a machine pays out, the pile
+  on the floor is visible to the other players and disappears when it's
+  picked up. Nobody else can grab yours.
+* Fixed: if you don't play as Larry, nobody could see you and you couldn't
+  see anyone. Two players connected fine, handshaked, and were invisible to
+  each other, because the mod looked for the player body by Larry's name.
+  It now finds whichever character you picked. Thanks Ted for the report.
+* Fixed a cabinet you were watching quietly loading extra coins into your
+  copy of it every round, which eventually froze it solid when you played
+  it yourself.
+* Fixed the machine stream stopping two seconds into every round.
+* You can't touch anything in a cabinet somebody else is playing. Before
+  this you could pick up a ball a friend had just won.
+* The F9 panel is a lot smaller and only shows what a player needs. Tick
+  "Tester mode" at the bottom (or set TesterMode in the config) to get the
+  counters, diagnostics and test tools back. Do that if you're sending bug
+  reports - it puts the numbers in.
+* For now you see other players as your own character (if you're Mandy and
+  they're Larry, they look like Mandy to you). That's next.
+
 0.11.0
 ------
 * Local test mode - two copies of the game on one PC play together over

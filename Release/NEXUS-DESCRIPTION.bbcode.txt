@@ -1,93 +1,62 @@
-[size=5][b]Play The Coin Game with a friend[/b][/size]
+[size=5][b]The Coin Game, but with your friends[/b][/size]
 
-You share an island. You walk around it together, you take turns on the machines, and you watch each other play. Your money stays yours.
+2-4 players on one island over steam. you can see each other walk around, watch each other play the machines, ride in each others cars. everyone keeps their own money.
 
-This is an unofficial fan mod. You each need your own copy of the game.
+unofficial fan mod, nothing to do with devotid. everyone needs their own copy of the game.
 
-[b]This is a public beta.[/b] It has been tested heavily by one person and only lightly with two. Please read the "Your save" section below before you install.
+[b]public beta.[/b] it works, but it's a beta - read the "your save" bit before installing.
 
-[size=4][b]What it does[/b][/size]
+[size=4][b]what it does[/b][/size]
 [list]
-[*]Two to four players over Steam's own networking. No servers, no port forwarding, no IP addresses. You host, hit Invite Friend, they join from the friends list.
-[*]You see each other move around properly, with real animation, not dots on a map.
-[*]Machines have an owner. If someone is on a cabinet it won't take your card, but you can stand there and watch them play it, coins and all, instead of being locked out of the room.
-[*]Everyone keeps their own money, tickets, prizes and inventory. Watching a friend win a jackpot doesn't pay you, and doesn't pay them twice.
-[*]Unlocks, doors and vehicles are shared while you play together, so the island opens up for everyone.
+[*]host makes a friends-only steam lobby, friends join from the friends list. no servers, no port forwarding.
+[*]you see each other properly, walking animations and all.
+[*]machines have an owner. if someone's on a cabinet it won't take your card, but you can stand there and watch them play it - the coins, the claw and their score on the cabinet screen, live.
+[*]tickets and prizes a friend wins show up on the floor for everyone. only they can pick them up.
+[*]everyone keeps their own money, tickets, prizes and inventory. watching a friend win doesn't pay you.
+[*]unlocks, doors and vehicles are shared while you play together.
+[*]ride along in a car a friend is driving (F7).
 [/list]
 
-[size=4][b]Installing[/b][/size]
-Manual install. Three steps, about ten minutes the first time and thirty seconds every time after that.
+[size=4][b]installing[/b][/size]
+manual install, takes about 10 min the first time.
 
-[b]1 - Find your game folder.[/b]
-In Steam, right-click The Coin Game, then Manage, then Browse local files. That is the folder with TheCoinGame.exe in it. Leave the window open, you need it twice.
+[b]1.[/b] find your game folder. steam > right click The Coin Game > Manage > Browse local files.
 
-[b]2 - Install MelonLoader.[/b]
-MelonLoader is what lets mods run at all. It is not made by me. Get MelonLoader.Installer.exe from the official site, [url=https://melonloader.net]melonloader.net[/url].
+[b]2.[/b] install MelonLoader from [url=https://melonloader.net]melonloader.net[/url] (not made by me). run the installer, point it at TheCoinGame.exe, pick [b]v0.6.6[/b] from the list (not "latest"), tick x64, install. launch the game once and let it reach the main menu - first launch is slow, it's building a cache. quit.
 
-Run it, click SELECT and point it at TheCoinGame.exe. Pick [b]v0.6.6[/b] from the version list - not "Latest". Tick [b]x64[/b]. Leave everything else alone and click INSTALL.
-
-Now launch the game once from Steam and let it reach the main menu. The first start is slow: MelonLoader is building its cache and can sit on a black screen for a minute or two. That is normal and only happens once. Quit when you see the menu.
-
-[b]3 - Drop the mod in.[/b]
-Open the zip. Inside is a folder called [b]Mods[/b]. Drag it into your game folder from step 1 and let Windows merge it. When you are done you should have:
-
+[b]3.[/b] open the zip, drag the [b]Mods[/b] folder into your game folder. you should end up with:
 [code]<game folder>\Mods\TcgMultiplayer.dll[/code]
+if you get a Mods folder inside a Mods folder, drag it up one. that's the only thing that ever goes wrong.
 
-If you end up with a Mods folder inside another Mods folder, drag it one level up. That is the only thing that usually goes wrong here.
+launch, press [b]F9[/b]. if the panel opens you're good.
 
-Launch from Steam and press [b]F9[/b]. If the panel opens, you are done.
+updating = replace the dll. uninstalling = delete it. everyone playing needs the same version, the mod checks.
 
-[b]Updating later:[/b] replace TcgMultiplayer.dll with the new one. [b]Uninstalling:[/b] delete it. MelonLoader stays put either way, and your save is never touched.
+[i]heads up: the other coin game mods use BepInEx, this one uses MelonLoader. both in one folder = the game starts with no mods and no error. pick one.[/i]
 
-Everyone playing installs it, and everyone needs the same version. The mod checks, and will tell you if you don't match.
+[size=4][b]your save[/b][/size]
+your save gets copied aside the first time you host or join (5 copies kept, in TcgMultiplayer_SaveBackups next to your save). when you visit someone's island you see their unlocks, and your own get put back when you leave. F10 runs a self check against your real save if you want to see it work.
 
-[i]Note: the other Coin Game mods here use BepInEx, and this one uses MelonLoader. Two mod loaders in one game folder often means the game starts with no mods at all and no hint why. Pick one.[/i]
+[size=4][b]achievements[/b][/size]
+blocked while you're in a session, on purpose. watching a friend's round replays it on your machine, so without this their skee ball score could post under your name. playing alone is untouched.
 
-[size=4][b]Your save[/b][/size]
-Your save folder is copied aside automatically the first time you host or join. Five copies are kept, in a TcgMultiplayer_SaveBackups folder next to your save.
+[size=4][b]keys[/b][/size]
+F9 panel · F7 ride along · F8 move game to next monitor · F10 self check · F11 unstick everything
 
-When you visit someone else's island you see their unlocks while you are there, and your own progression is put back when you leave - keeping anything you unlocked yourself. The one gap is a crash mid-session, which is what the backup is for.
-
-Press [b]F10[/b] any time to run a built-in self-check. It verifies, against your own save, that a full visit gives your progression back. It takes a couple of seconds.
-
-[size=4][b]Achievements and leaderboards[/b][/size]
-While you are in a session, the mod blocks the game from submitting anything to Steam.
-
-This is deliberate. Spectating works by replaying your friend's round on your machine - without the block, their score would post to the leaderboard under your name. I was not willing to ship something that quietly pollutes the leaderboards.
-
-[b]Playing alone, with nobody connected, is completely untouched.[/b] Achievements and leaderboards work exactly as they always have.
-
-[size=4][b]Controls[/b][/size]
+[size=4][b]known stuff[/b][/size]
 [list]
-[*][b]F9[/b] - open the multiplayer panel
-[*][b]F10[/b] - run the self-check
-[*][b]F11[/b] - get unstuck, releases every machine you are holding
-[/list]
-All keys and settings are in MelonLoader's config, under TcgMultiplayer.
-
-[size=4][b]Known issues and limitations[/b][/size]
-[list]
-[*]Two to four players. Four is what the bandwidth is designed around.
-[*]No host migration. If the host leaves, the session ends for everyone. It ends cleanly and everyone keeps their own progression, but it ends.
-[*]NPCs are not synced. You will each see them doing their own thing.
-[*]Both players need the same version of the game. A Coin Game update will probably need a mod update.
-[*]Voice chat is not in. Use Discord.
-[*]This is a beta. The stranger corners of the game have not been tested with two people. Please report what you find.
+[*]no host migration. host leaves, session ends (cleanly, nobody loses anything).
+[*]npcs aren't synced.
+[*]you see other players as your own character for now (if you're mandy and they're larry, they look like mandy to you). next on the list.
+[*]a coin game update will probably break it until I update.
+[*]no voice chat, use discord.
+[*]beta. weird corners of the game haven't been tried with two people. tell me what you find.
 [/list]
 
-[size=4][b]Bug reports[/b][/size]
-The mod writes a session report every time you finish playing. Please send it along with your MelonLoader log. Both live in the game folder - Steam, right-click The Coin Game, Manage, Browse local files:
-[list]
-[*]TcgMultiplayer_Reports\session_....txt
-[*]MelonLoader\Latest.log
-[/list]
-If you can, send both files from [b]both[/b] players. Half a multiplayer bug usually is not enough to fix it.
+[size=4][b]bugs[/b][/size]
+tick [b]Tester mode[/b] at the bottom of the F9 panel before you play - it puts the numbers in the report. the mod writes a report file after every session in TcgMultiplayer_Reports next to the game. send me that plus MelonLoader\Latest.log, from both players if you can. nothing is uploaded automatically.
 
-Nothing is sent anywhere on its own. The session report is a plain text file on your disk that you choose to send.
+best place: [url=https://discord.gg/8Q9dH7wcxS]Koop's Mods discord[/url]. source is on [url=https://github.com/Koopz8/tcg-multiplayer]github[/url].
 
-[size=4][b]Credits[/b][/size]
-MelonLoader by Lava Gang (Apache 2.0), which you install yourself from its official site - nothing to do with it is redistributed here. HarmonyX (MIT). Steamworks.NET by Riley Labrecque (MIT), already shipped with the game. Nothing from The Coin Game is redistributed here either.
-
-The Coin Game is by devotid, published by Kwalee. This mod is unofficial and unaffiliated. I posted on the Steam discussion board before releasing, to ask whether they were happy for this to exist, and have not had a reply - so I am releasing it as an unofficial beta. If devotid or Kwalee would rather it did not exist, it comes down.
-
-The mod itself is MIT licensed - see LICENSE.txt in the download.
+[size=4][b]credits[/b][/size]
+MelonLoader (Lava Gang), HarmonyX, Steamworks.NET. none of it is redistributed here. The Coin Game is by devotid / Kwalee, this is unofficial - if they'd rather it didn't exist, it comes down. mod is MIT.

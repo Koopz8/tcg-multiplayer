@@ -20,7 +20,9 @@ If you have BepInEx in the folder from another mod, take it out. Two loaders and
 
 - **Host** makes a friends-only Steam lobby. **Invite** opens the normal Steam invite thing. Your friend can also paste a lobby ID.
 - Steam invites work whether the game is open or not.
-- Walk up to a machine and put your card in like normal. Whoever gets there first gets it, everyone else's card gets refused until they're done. You can stand there and watch.
+- Walk up to a machine and put your card in like normal. Whoever gets there first gets it, everyone else's card gets refused until they're done. You can stand there and watch - the coins, the claw and their score on the cabinet screen all move live.
+- Tickets and prizes a friend wins show up on the floor for everyone. Only they can pick them up.
+- The F9 panel shows the basics. Tick **Tester mode** at the bottom (or `TesterMode` in the config) for the counters and test tools - do that before sending a bug report.
 - **F7** gets in/out of a vehicle a friend is driving.
 - **F8** moves the game to your next monitor (works even if you can't see the game - the base game has no setting for this and it kept opening on the wrong screen for me).
 - **F10** runs a self check. **F11** un-sticks you from everything if something goes wrong.
