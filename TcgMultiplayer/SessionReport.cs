@@ -169,6 +169,9 @@ namespace TcgMultiplayer
                 Line("   physics bodies", m.Physics.BodiesSent + " sent, " + m.Physics.BodiesApplied + " applied");
                 Line("   count mismatches", m.Physics.CountMismatches
                      + (m.Physics.CountMismatches > 0 ? "   <-- the two sides disagreed about a machine" : ""));
+                if (m.Physics.UnknownKeys > 0)
+                    Line("   waited on a key", m.Physics.UnknownKeys
+                         + " packets arrived naming a body we hadn't been told about yet");
                 if (m.Physics.StandInsBuilt > 0 || m.Physics.StandInMisses > 0)
                     Line("   stood in for", m.Physics.StandInsBuilt + " objects their round spawned and ours didn't"
                          + (m.Physics.StandInMisses > 0

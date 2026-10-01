@@ -69,12 +69,46 @@ namespace TcgMultiplayer.Game
         private readonly List<Rigidbody> _bodies = new List<Rigidbody>(128);
         private readonly List<Rigidbody> _lastSentBodies = new List<Rigidbody>(128);
         private readonly List<string> _keys = new List<string>(128);
-        private readonly List<Vector3> _lastSentPos = new List<Vector3>(128);
-        private readonly List<bool> _lastSentOn = new List<bool>(128);
+        /// <summary>
+        /// The pose each body was last SENT at, keyed by its number rather than
+        /// its slot. Slots shift the moment a chip spawns in the middle of the
+        /// walk, which used to invalidate every cached pose and force a full
+        /// dump of all of them. A number doesn't shift, so a chip appearing
+        /// costs one body's worth of packet instead of two hundred.
+        /// </summary>
+        private readonly Dictionary<ushort, Vector3> _sentPos = new Dictionary<ushort, Vector3>(1024);
+        private readonly Dictionary<ushort, bool> _sentOn = new Dictionary<ushort, bool>(1024);
         private readonly List<int> _send = new List<int>(128);
+
+        // ---- the key dictionary
+        //
+        // A manifest used to spell out every body's full path, and a manifest
+        // goes out whenever the set of bodies changes. On Cuckoo that is every
+        // time a chip spawns or gets collected: 183 manifests in three minutes,
+        // each re-sending the same two hundred and fifty strings, which was half
+        // of all the physics traffic. "OBJECTS/CHIP_1(Clone)#37" is 24 bytes and
+        // it does not change.
+        //
+        // So each path is given a number once and the manifest sends numbers.
+        // Definitions go out when the key is new, and all of them again on the
+        // five-second keyframe, because this is the unreliable channel and a
+        // definition can be lost like anything else.
+        private readonly Dictionary<string, ushort> _keyIds = new Dictionary<string, ushort>(1024);
+        private readonly List<string> _keyList = new List<string>(1024);
+        private readonly List<ushort> _ids = new List<ushort>(256);
+        private readonly List<ushort> _defs = new List<ushort>(256);
+        private readonly List<ushort> _recentDefs = new List<ushort>(64);
+        private byte _keyGen;
+        private float _nextKeyframeAt;
+        /// <summary>
+        /// Recently defined keys are repeated on every manifest, so a lost
+        /// definition is usually repaired in the next packet rather than waiting
+        /// for the keyframe. A spawned chip is exactly the case that matters:
+        /// its definition is new, and it is also the thing moving.
+        /// </summary>
+        private const int RecentRepeat = 16;
         private int _refreshCursor, _sizeComplaints;
         private uint _lastSentMachine;
-        private float _nextManifestAt;
 
         // -------------------------------------------------------- watcher side
         private sealed class Target
@@ -126,6 +160,9 @@ namespace TcgMultiplayer.Game
             /// </summary>
             public readonly Dictionary<string, Rigidbody> StandIns = new Dictionary<string, Rigidbody>();
             public readonly HashSet<string> StandInGaveUp = new HashSet<string>();
+            /// <summary>Path per number, as the owner has defined them. See the key dictionary.</summary>
+            public readonly Dictionary<ushort, string> KeyNames = new Dictionary<ushort, string>(1024);
+            public int KeyGen = -1;
             public bool StandInCapSaid;
         }
         private struct Snapshot
@@ -382,6 +419,67 @@ namespace TcgMultiplayer.Game
             return true;
         }
 
+        /// <summary>
+        /// Numbers for the current walk, and definitions for the ones the
+        /// watcher cannot be assumed to know yet: new keys always, every key on
+        /// a keyframe, plus a repeat of the most recent ones so a lost
+        /// definition is normally repaired by the next packet.
+        /// </summary>
+        private void BuildIds(bool keyframe)
+        {
+            _ids.Clear();
+            _defs.Clear();
+            for (int i = 0; i < _keys.Count; i++)
+            {
+                ushort id;
+                bool isNew = false;
+                if (!_keyIds.TryGetValue(_keys[i], out id))
+                {
+                    if (_keyList.Count >= 65000)
+                    {
+                        // Sixty-five thousand distinct paths in one lease means
+                        // something is spawning without end; start the numbering
+                        // over rather than wrap around onto live numbers.
+                        _keyIds.Clear(); _keyList.Clear(); _recentDefs.Clear();
+                        _sentPos.Clear(); _sentOn.Clear();
+                        _keyGen++;
+                        keyframe = true;
+                        i = -1;
+                        _ids.Clear(); _defs.Clear();
+                        continue;
+                    }
+                    id = (ushort)_keyList.Count;
+                    _keyList.Add(_keys[i]);
+                    _keyIds[_keys[i]] = id;
+                    isNew = true;
+                    _recentDefs.Add(id);
+                }
+                _ids.Add(id);
+                if (keyframe || isNew) _defs.Add(id);
+            }
+            if (_recentDefs.Count > RecentRepeat * 4)
+                _recentDefs.RemoveRange(0, _recentDefs.Count - RecentRepeat * 4);
+            if (!keyframe)
+            {
+                for (int r = Mathf.Max(0, _recentDefs.Count - RecentRepeat); r < _recentDefs.Count; r++)
+                    if (!_defs.Contains(_recentDefs[r])) _defs.Add(_recentDefs[r]);
+            }
+
+            // Poses for numbers no longer in the walk are dead weight; the
+            // keyframe is a cheap moment to drop them.
+            if (keyframe && _sentPos.Count > _ids.Count * 2 + 64)
+            {
+                _live.Clear();
+                for (int i = 0; i < _ids.Count; i++) _live.Add(_ids[i]);
+                _dropped.Clear();
+                foreach (var kv in _sentPos) if (!_live.Contains(kv.Key)) _dropped.Add(kv.Key);
+                for (int i = 0; i < _dropped.Count; i++) { _sentPos.Remove(_dropped[i]); _sentOn.Remove(_dropped[i]); }
+            }
+        }
+
+        private readonly HashSet<ushort> _live = new HashSet<ushort>();
+        private readonly List<ushort> _dropped = new List<ushort>();
+
         private static Vector3 PoseOf(Rigidbody rb, Vector3 origin, Quaternion inv)
         {
             if (rb == null) return Vector3.zero;
@@ -407,25 +505,44 @@ namespace TcgMultiplayer.Game
                 for (int i = 0; i < _bodies.Count; i++)
                     if (!ReferenceEquals(_bodies[i], _lastSentBodies[i])) { changed = true; break; }
 
-            bool manifest = changed || now >= _nextManifestAt;
+            // The keyframe clock runs on its own. Resetting it on every
+            // change-driven manifest would mean a full set of definitions
+            // almost never went out, because during a round the set changes
+            // about once a second — and then a lost definition would never be
+            // repaired.
+            bool keyframe = now >= _nextKeyframeAt;
+            bool manifest = changed || keyframe;
+            if (keyframe) _nextKeyframeAt = now + ManifestKeyframeEvery;
             if (manifest)
             {
                 Gather(m.Root, _bodies, _keys);
                 _lastSentBodies.Clear();
                 _lastSentBodies.AddRange(_bodies);
-                _nextManifestAt = now + ManifestKeyframeEvery;
                 ManifestsSent++;
             }
             TrackDepartures(m);
             if (newMachine)
             {
-                _lastSentPos.Clear();
-                _lastSentOn.Clear();
+                _sentPos.Clear();
+                _sentOn.Clear();
                 _refreshCursor = 0;
                 _lastSentMachine = m.Id;
+                _keyIds.Clear();
+                _keyList.Clear();
+                _recentDefs.Clear();
+                _ids.Clear();
+                _keyGen++;              // tells the watcher to forget the old numbers
+                _nextKeyframeAt = 0f;   // and get a full set straight away
+                keyframe = true;
+                manifest = true;
+                if (_keys.Count != _bodies.Count) Gather(m.Root, _bodies, _keys);
                 if (_describedOwner.Add(m.Id)) DescribeRoot(m, _bodies, "Owner");
             }
-            else if (changed) { _lastSentPos.Clear(); _lastSentOn.Clear(); _refreshCursor = 0; }
+
+            // The numbering has to exist before we can decide who goes in the
+            // packet, because that decision is now made per number.
+            if (manifest) BuildIds(keyframe);
+            if (_ids.Count != _bodies.Count) return null;   // no mapping, nothing safe to send
 
             var origin = m.Root.position;
             var inv = Quaternion.Inverse(m.Root.rotation);
@@ -443,45 +560,59 @@ namespace TcgMultiplayer.Game
             // once and is then quiet — which is the whole point.
             int moved = 0;
             _send.Clear();
-            bool sparse = !manifest && _lastSentPos.Count == _bodies.Count;
-            int sliceFrom = 0, sliceTo = 0;
-            if (sparse)
-            {
-                int slice = _bodies.Count / RefreshSlice + 1;
-                if (_refreshCursor >= _bodies.Count) _refreshCursor = 0;
-                sliceFrom = _refreshCursor;
-                sliceTo = sliceFrom + slice;
-                _refreshCursor = sliceTo >= _bodies.Count ? 0 : sliceTo;
-            }
+            const bool sparse = true;   // every packet names what it carries now
+            int slice = _bodies.Count / RefreshSlice + 1;
+            if (_refreshCursor >= _bodies.Count) _refreshCursor = 0;
+            int sliceFrom = _refreshCursor;
+            int sliceTo = sliceFrom + slice;
+            _refreshCursor = sliceTo >= _bodies.Count ? 0 : sliceTo;
 
             for (int i = 0; i < _bodies.Count; i++)
             {
                 var rb = _bodies[i];
                 Vector3 lp = PoseOf(rb, origin, inv);
                 bool on = rb != null && rb.gameObject.activeInHierarchy;
+                ushort id = _ids[i];
 
-                bool isMoved = false;
-                if (i < _lastSentPos.Count)
-                {
-                    isMoved = (lp - _lastSentPos[i]).sqrMagnitude > 0.001f * 0.001f
-                              || i >= _lastSentOn.Count || _lastSentOn[i] != on;
-                    if (isMoved) moved++;
-                }
+                Vector3 was;
+                bool wasOn;
+                bool known = _sentPos.TryGetValue(id, out was) && _sentOn.TryGetValue(id, out wasOn);
+                bool isMoved = !known
+                               || (lp - was).sqrMagnitude > 0.001f * 0.001f
+                               || _sentOn[id] != on;
+                if (isMoved && known) moved++;
 
-                if (!sparse) { _send.Add(i); continue; }
                 if (isMoved || (i >= sliceFrom && i < sliceTo)) _send.Add(i);
             }
+            if (_send.Count == 0 && !manifest) return null;
 
             int size = (sparse ? 6 : 4) + _send.Count * (sparse ? 17 : 15);
-            byte[][] keyBytes = null;
+            byte[][] defBytes = null;
+            int[] defShared = null;
             if (manifest)
             {
-                keyBytes = new byte[_bodies.Count][];
-                for (int i = 0; i < _bodies.Count; i++)
+                // Each definition drops the part of the path it shares with the
+                // one before it. Sibling coins differ in their last character.
+                defBytes = new byte[_defs.Count][];
+                defShared = new int[_defs.Count];
+                byte[] prev = null;
+                for (int d = 0; d < _defs.Count; d++)
                 {
-                    keyBytes[i] = Encoding.UTF8.GetBytes(_keys[i]);
-                    size += 2 + keyBytes[i].Length;
+                    var full = Encoding.UTF8.GetBytes(_keyList[_defs[d]]);
+                    int shared = 0;
+                    if (prev != null)
+                    {
+                        int max = Mathf.Min(255, Mathf.Min(prev.Length, full.Length));
+                        while (shared < max && prev[shared] == full[shared]) shared++;
+                    }
+                    defShared[d] = shared;
+                    var suffix = new byte[full.Length - shared];
+                    Buffer.BlockCopy(full, shared, suffix, 0, suffix.Length);
+                    defBytes[d] = suffix;
+                    prev = full;
+                    size += 5 + suffix.Length;
                 }
+                size += 3 + _ids.Count * 2;     // generation, definition count, the numbers
             }
 
             var buf = new byte[size];
@@ -490,17 +621,19 @@ namespace TcgMultiplayer.Game
             WriteU16(buf, ref o, manifest ? FlagManifest : (sparse ? FlagSparse : (ushort)0));
             if (manifest)
             {
-                for (int i = 0; i < _bodies.Count; i++)
+                buf[o++] = _keyGen;
+                WriteU16(buf, ref o, (ushort)_defs.Count);
+                for (int d = 0; d < _defs.Count; d++)
                 {
-                    WriteU16(buf, ref o, (ushort)keyBytes[i].Length);
-                    Buffer.BlockCopy(keyBytes[i], 0, buf, o, keyBytes[i].Length);
-                    o += keyBytes[i].Length;
+                    buf[o++] = (byte)defShared[d];
+                    WriteU16(buf, ref o, _defs[d]);
+                    WriteU16(buf, ref o, (ushort)defBytes[d].Length);
+                    Buffer.BlockCopy(defBytes[d], 0, buf, o, defBytes[d].Length);
+                    o += defBytes[d].Length;
                 }
+                for (int i = 0; i < _ids.Count; i++) WriteU16(buf, ref o, _ids[i]);
             }
             if (sparse) WriteU16(buf, ref o, (ushort)_send.Count);
-
-            while (_lastSentPos.Count < _bodies.Count) _lastSentPos.Add(Vector3.zero);
-            while (_lastSentOn.Count < _bodies.Count) _lastSentOn.Add(false);
 
             for (int k = 0; k < _send.Count; k++)
             {
@@ -514,8 +647,8 @@ namespace TcgMultiplayer.Game
                     lr = inv * rb.transform.rotation;
                 }
                 bool on = rb != null && rb.gameObject.activeInHierarchy;
-                _lastSentPos[i] = lp;
-                _lastSentOn[i] = on;
+                _sentPos[_ids[i]] = lp;
+                _sentOn[_ids[i]] = on;
 
                 if (sparse) WriteU16(buf, ref o, (ushort)i);
 
@@ -661,16 +794,60 @@ namespace TcgMultiplayer.Game
                 for (int i = 0; i < _scratch.Count; i++)
                     if (_scratch[i] != null && !_byKey.ContainsKey(_scratchKeys[i])) _byKey[_scratchKeys[i]] = _scratch[i];
 
+                // The owner's numbering, and whatever it has told us the numbers
+                // mean. A generation change means the owner started on a
+                // different machine and the old numbers are meaningless.
+                if (o + 3 > data.Length) return;
+                byte gen = data[o++];
+                if (gen != w.KeyGen) { w.KeyNames.Clear(); w.KeyGen = gen; }
+
+                int defCount = ReadU16(data, ref o);
+                byte[] prevKey = null;
+                for (int d = 0; d < defCount; d++)
+                {
+                    if (o + 5 > data.Length) return;
+                    int shared = data[o++];
+                    ushort defId = (ushort)ReadU16(data, ref o);
+                    int suffixLen = ReadU16(data, ref o);
+                    if (o + suffixLen > data.Length) return;
+                    if (prevKey == null ? shared != 0 : shared > prevKey.Length) return;
+
+                    var full = new byte[shared + suffixLen];
+                    if (shared > 0) Buffer.BlockCopy(prevKey, 0, full, 0, shared);
+                    Buffer.BlockCopy(data, o, full, shared, suffixLen);
+                    o += suffixLen;
+                    prevKey = full;
+                    w.KeyNames[defId] = Encoding.UTF8.GetString(full);
+                }
+
                 w.Aligned.Clear();
                 int matched = 0, stood = 0;
                 string firstMiss = null;
                 for (int i = 0; i < count; i++)
                 {
                     if (o + 2 > data.Length) return;
-                    int len = ReadU16(data, ref o);
-                    if (o + len > data.Length) return;
-                    var key = Encoding.UTF8.GetString(data, o, len);
-                    o += len;
+                    ushort id = (ushort)ReadU16(data, ref o);
+                    string key;
+                    if (!w.KeyNames.TryGetValue(id, out key))
+                    {
+                        // A definition went missing. Nothing is applied from a
+                        // manifest we can't read; the keyframe redefines the lot
+                        // within five seconds, and the repeat of recent keys
+                        // usually fixes it in the next packet.
+                        UnknownKeys++;
+                        // Half an alignment is worse than none: if the next
+                        // packet's body count happened to match, poses would be
+                        // written against the wrong bodies.
+                        w.Aligned.Clear();
+                        w.HaveManifest = false;
+                        if (_unknownKeySaid < 3)
+                        {
+                            _unknownKeySaid++;
+                            Plugin.Warn("Waiting on " + m.Label + ": the owner used body number " + id
+                                        + " and we haven't been told what that is yet.");
+                        }
+                        return;
+                    }
 
                     Rigidbody rb;
                     if (_byKey.TryGetValue(key, out rb)) { w.Aligned.Add(rb); matched++; }
@@ -719,6 +896,17 @@ namespace TcgMultiplayer.Game
                 if (Report != null) Report.Bodies(m.Id, m.Label, _scratch.Count, count, matched, stood);
                 w.Unmatched = count - matched;
                 while (w.Targets.Count < count) w.Targets.Add(new Target());
+
+                // A manifest can renumber the slots — a chip spawning in the
+                // middle of the walk pushes every later body down one. Now that
+                // a manifest no longer carries every pose, a slot's old target
+                // would be driving whatever body has landed in that slot, so
+                // every target is parked until a pose for it actually arrives.
+                // Nothing moves on its own in the meantime; they are all
+                // kinematic while we watch.
+                for (int i = 0; i < w.Targets.Count; i++) w.Targets[i].At = 0f;
+                for (int i = 0; i < w.LastPos.Count; i++)
+                    w.LastPos[i] = new Vector3(-99999f, -99999f, -99999f);
 
                 // Said when the picture changes, not once per packet: two saves
                 // holding different numbers of coins is the steady state, and a
@@ -968,6 +1156,8 @@ namespace TcgMultiplayer.Game
         /// </summary>
         private const int StandInCap = 512;
         private readonly HashSet<string> _standInMissSaid = new HashSet<string>();
+        private int _unknownKeySaid;
+        public int UnknownKeys;
         public int StandInsBuilt, StandInMisses;
 
         public void ReleaseMachine(uint machineId)
