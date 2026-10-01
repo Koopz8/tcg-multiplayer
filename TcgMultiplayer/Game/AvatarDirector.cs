@@ -24,6 +24,7 @@ namespace TcgMultiplayer.Game
         private readonly PlayerRig _rig = new PlayerRig();
         private readonly Dictionary<ulong, RemoteAvatar> _avatars = new Dictionary<ulong, RemoteAvatar>();
         private readonly List<ulong> _scratch = new List<ulong>();
+        private string _announcedCharacter = "";
 
         // Mirror mode plumbing
         private readonly Queue<KeyValuePair<float, byte[]>> _mirrorQueue = new Queue<KeyValuePair<float, byte[]>>();
@@ -59,6 +60,16 @@ namespace TcgMultiplayer.Game
             _session = session;
             _session.OnPlayerState += OnPlayerState;
             _session.OnPeerGone += id => Despawn(id.m_SteamID);
+
+            // Someone told us who they are, late. If we already built them a
+            // body from the wrong source, drop it - the next position packet
+            // is a few milliseconds away and rebuilds it as the right one.
+            _session.OnCharacter += (id, who) =>
+            {
+                if (!_avatars.ContainsKey(id.m_SteamID)) return;
+                Plugin.Log("Rebuilding their body as " + who + ".");
+                Despawn(id.m_SteamID);
+            };
         }
 
         // ----------------------------------------------------------------- pump
@@ -69,6 +80,18 @@ namespace TcgMultiplayer.Game
             {
                 _nextAcquireAt = Time.time + 1f;
                 _rig.Acquire();
+            }
+
+            // You join from the menu and load in afterwards, so at handshake
+            // time there is no player yet and nobody knows which character
+            // they are. Say so as soon as we do, and again if it ever changes.
+            if (_session.State == SessionState.InLobby
+                && PlayerRig.LocalCharacter.Length > 0
+                && PlayerRig.LocalCharacter != _announcedCharacter)
+            {
+                _announcedCharacter = PlayerRig.LocalCharacter;
+                _session.SendCharacter(_announcedCharacter);
+                Plugin.Log("Told everyone we're playing as " + _announcedCharacter + ".");
             }
 
             bool sending = _rig.Valid && (MirrorEnabled || _session.State == SessionState.InLobby);
@@ -225,6 +248,8 @@ namespace TcgMultiplayer.Game
             foreach (var kv in _avatars) _scratch.Add(kv.Key);
             foreach (var k in _scratch) Despawn(k);
             _mirrorQueue.Clear();
+            // Next session announces again from scratch.
+            _announcedCharacter = "";
         }
 
         /// <summary>
