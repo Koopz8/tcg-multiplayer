@@ -28,7 +28,15 @@ namespace TcgMultiplayer.Game
     /// </summary>
     internal sealed class ScreenReplicator
     {
-        private const float PollEvery = 0.2f;
+        /// <summary>
+        /// Was 0.2 s, which is fine for numbers and fatal for anything that
+        /// slides: Treasure's countdown rides on the shovel's X/Y carriage, so
+        /// the carriage went with it — snapped into place five times a second
+        /// while the shovel under it (streamed as a body, twenty times a
+        /// second) moved smoothly. "The top half of the arm is choppy". Ten a
+        /// second, eased on the watcher's side, keeps the two together.
+        /// </summary>
+        private const float PollEvery = 0.1f;
         private const float KeyframeEvery = 5f;
         private const byte FlagKeyframe = 1;
 
@@ -72,7 +80,23 @@ namespace TcgMultiplayer.Game
             public int OverrideLogs;
             public float RescanAt;
             public bool Described;
+            /// <summary>Slides in progress: each placed object eases from where it's drawn to where the owner has it.</summary>
+            public readonly Dictionary<Transform, Ease> Easing = new Dictionary<Transform, Ease>();
+            public float Gap = PollEvery, LastPacketAt = -1f;
         }
+        private sealed class Ease
+        {
+            public Vector3 From, To;
+            public float At, Dur;
+        }
+
+        /// <summary>
+        /// Further than this in one packet is a jump, not a slide — the
+        /// scrolling player name wraps from one side of its panel to the other
+        /// (130 canvas units), and easing that would drag it back across the
+        /// screen. The shovel's carriage moves centimetres per packet.
+        /// </summary>
+        private const float SnapBeyond = 20f;
         private readonly Dictionary<uint, Watched> _watched = new Dictionary<uint, Watched>();
 
         /// <summary>Per-machine spectating summary; see WatchReport.</summary>
@@ -273,6 +297,13 @@ namespace TcgMultiplayer.Game
                 _watched[m.Id] = w;
             }
 
+            if (w.LastPacketAt >= 0f)
+            {
+                float gap = now - w.LastPacketAt;
+                if (gap > 0.01f && gap < 1f) w.Gap = Mathf.Lerp(w.Gap, gap, 0.1f);
+            }
+            w.LastPacketAt = now;
+
             var r = new System.IO.BinaryReader(new System.IO.MemoryStream(data), Encoding.UTF8);
             bool keyframe = (r.ReadByte() & FlagKeyframe) != 0;
             int count = r.ReadUInt16();
@@ -324,9 +355,25 @@ namespace TcgMultiplayer.Game
                             Plugin.Log("Screen: moving " + tr.name + " (" + key + " level " + c + ") "
                                        + tr.localPosition.ToString("F1") + " -> " + pos[c].ToString("F1"));
                         }
-                        tr.localPosition = pos[c];
+                        Ease e;
+                        bool known = w.Easing.TryGetValue(tr, out e);
+                        var from = tr.localPosition;
+                        if (!known || (pos[c] - from).magnitude > SnapBeyond)
+                        {
+                            tr.localPosition = pos[c];
+                            from = pos[c];
+                        }
+                        if (!known) { e = new Ease(); w.Easing[tr] = e; }
+                        e.From = from;
+                        e.To = pos[c];
+                        e.At = now;
+                        e.Dur = w.Gap * 1.1f;
                     }
-                    w.Placed[tr] = pos[c];
+                    else if (!w.Easing.ContainsKey(tr))
+                    {
+                        w.Easing[tr] = new Ease { From = pos[c], To = pos[c], At = now, Dur = 0f };
+                    }
+                    w.Placed[tr] = tr.localPosition;
                     if (tr.gameObject.activeSelf != on[c]) SetActiveRemembering(w, tr.gameObject, on[c]);
                 }
 
@@ -359,14 +406,25 @@ namespace TcgMultiplayer.Game
             foreach (var kv in _watched)
             {
                 var w = kv.Value;
-                foreach (var p in w.Placed)
+                float now = Time.time;
+                foreach (var p in w.Easing)
                 {
                     var tr = p.Key;
                     if (tr == null) continue;
-                    if ((tr.localPosition - p.Value).sqrMagnitude > 1e-6f) { tr.localPosition = p.Value; MovesOverridden++; }
+                    var e = p.Value;
+                    float k = e.Dur <= 0.0001f ? 1f : Mathf.Clamp01((now - e.At) / e.Dur);
+                    var want = Vector3.LerpUnclamped(e.From, e.To, k);
+                    Vector3 placed;
+                    if (w.Placed.TryGetValue(tr, out placed) && (tr.localPosition - placed).sqrMagnitude > 1e-6f) MovesOverridden++;
+                    tr.localPosition = want;
+                    _placedScratch.Add(new KeyValuePair<Transform, Vector3>(tr, want));
                 }
+                for (int i = 0; i < _placedScratch.Count; i++) w.Placed[_placedScratch[i].Key] = _placedScratch[i].Value;
+                _placedScratch.Clear();
             }
         }
+
+        private readonly List<KeyValuePair<Transform, Vector3>> _placedScratch = new List<KeyValuePair<Transform, Vector3>>(64);
 
         /// <summary>Puts every string and every switch back the way the watcher had it.</summary>
         public void Release(uint machineId)
