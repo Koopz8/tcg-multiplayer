@@ -65,6 +65,11 @@ namespace TcgMultiplayer.Game
         // ---------------------------------------------------------- owner side
         private readonly List<Field> _mine = new List<Field>(64);
         private uint _mineMachine;
+        private readonly HashSet<Transform> _mineChains = new HashSet<Transform>();
+        /// <summary>The machine whose screen we last scanned as owner.</summary>
+        public uint MineMachine { get { return _mineMachine; } }
+        /// <summary>Is this transform moved for the watcher by the screen mirror (a text or one of its parents)?</summary>
+        public bool SentByScreen(Transform t) { return t != null && _mineChains.Contains(t); }
         private float _nextPollAt, _nextKeyframeAt, _nextRescanAt;
         private bool _described;
 
@@ -191,6 +196,10 @@ namespace TcgMultiplayer.Game
                 var before = _mine.Count;
                 Gather(m.Root, _mine);
                 FieldsFound = _mine.Count;
+                _mineChains.Clear();
+                for (int i = 0; i < _mine.Count; i++)
+                    for (int c = 0; c < _mine[i].Chain.Length; c++)
+                        if (_mine[i].Chain[c] != null) _mineChains.Add(_mine[i].Chain[c]);
                 if (!_described || _mine.Count != before)
                 {
                     _described = true;

@@ -40,6 +40,7 @@ namespace TcgMultiplayer.Game
         public readonly Rehearsal Rehearse = new Rehearsal();
         public readonly PhysicsReplicator Physics = new PhysicsReplicator();
         public readonly ScreenReplicator Screen = new ScreenReplicator();
+        public readonly UnsentMovers Unsent = new UnsentMovers();
         public readonly WatchReport Watch = new WatchReport();
         public readonly LooseItems Items = new LooseItems();
 
@@ -260,6 +261,7 @@ namespace TcgMultiplayer.Game
 
         public void OnSceneChanged()
         {
+            Unsent.End();
             Items.Reset();
             Physics.ReleaseAll(); Screen.ReleaseAll();
             Movers.ReleaseAll();
@@ -371,6 +373,7 @@ namespace TcgMultiplayer.Game
                 {
                     var screen = Screen.Poll(mine);
                     if (screen != null) _session.SendMachineScreen(mine.Id, screen);
+                    if (Screen.MineMachine == mine.Id) Unsent.Tick(mine, Screen.SentByScreen);
                 }
             }
 
@@ -552,7 +555,7 @@ namespace TcgMultiplayer.Game
             m.OwnerName = ownerName;
             m.OwnedByMe = owner != 0 && owner == _session.SelfId.m_SteamID;
 
-            if (m.Id == MyMachine && !m.OwnedByMe) MyMachine = 0;
+            if (m.Id == MyMachine && !m.OwnedByMe) { MyMachine = 0; Unsent.End(); }
             if (m.OwnedByMe)
             {
                 if (MyMachine != m.Id) _lastOwnMotionAt = Time.time;
