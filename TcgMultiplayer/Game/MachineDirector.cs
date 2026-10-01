@@ -176,16 +176,6 @@ namespace TcgMultiplayer.Game
                     // nothing — which is what it looks like from the inside
                     // when a lease is stuck. Worth saying out loud: a silent
                     // dead machine is indistinguishable from a bug in the game.
-                    if (m.Owner != 0 && !m.OwnedByMe)
-                    {
-                        live.RoundsBlockedByOwner++;
-                        if (live._blockedSaid.Add(m.Id))
-                            Plugin.Warn("You've started " + m.Label + " but "
-                                        + (string.IsNullOrEmpty(m.OwnerName) ? "someone else" : m.OwnerName)
-                                        + " still has it, so this round won't run here. It frees up when "
-                                        + "they walk away or the machine goes quiet.");
-                    }
-
                     m.LocallyOccupied = true;
                     live._awaySince = -1f;
                     live._watchStates.Add(m.Id);
@@ -1082,8 +1072,14 @@ namespace TcgMultiplayer.Game
             if (!_registry.TryGet(MyMachine, out m) || !m.OwnedByMe) { _leavingSince = -1f; return; }
             if (RidingMachine == m.Id || Ride.Riding == m.Id) { _leavingSince = -1f; return; }
 
-            // Still running? Then whatever that state meant, it wasn't the end.
-            if (Physics.SentMovedLastPacket > 0) { _leavingSince = -1f; return; }
+            // Still moving? Then don't hand it back yet — but don't give up on
+            // the idea either. Cancelling outright meant one coin still rolling
+            // when you pressed exit threw the whole request away, and the lease
+            // then sat with you until the twelve-second idle rule happened to
+            // catch it: twenty-one seconds, in the run that found this. Waiting
+            // for things to settle is the entire point, so the clock restarts
+            // instead of stopping.
+            if (Physics.SentMovedLastPacket > 0) { _leavingSince = Time.time; return; }
             if (Time.time - _leavingSince < HandBackAfterLeaving) return;
 
             _leavingSince = -1f;
@@ -1564,6 +1560,23 @@ namespace TcgMultiplayer.Game
                 // those two run costs no coins and may bring the screen back.
                 if (!IsDisplayFsm(objName))
                 {
+                    // Our own player is standing at this machine with a round
+                    // going, and we are throwing that round's events away
+                    // because somebody else holds the lease. From the inside
+                    // that is a cabinet which takes your card and then does
+                    // nothing, and it reads as the game being broken. It
+                    // didn't warn last time because the claim state can land
+                    // before we have been told who owns it; by here we know.
+                    if (m.LocallyOccupied && m.Owner != 0 && !m.OwnedByMe)
+                    {
+                        RoundsBlockedByOwner++;
+                        if (_blockedSaid.Add(m.Id))
+                            Plugin.Warn("You're playing " + m.Label + " but "
+                                        + (string.IsNullOrEmpty(m.OwnerName) ? "someone else" : m.OwnerName)
+                                        + " still has it, so this round won't run on your screen. "
+                                        + "It comes free when they walk away or it goes quiet.");
+                    }
+
                     Watch.Event(m.Id, false);
                     if (seen == 0 && _mutedByFsm.Count <= MutedLogCap)
                         Plugin.Log("Muted on " + m.Label + ": " + who);
