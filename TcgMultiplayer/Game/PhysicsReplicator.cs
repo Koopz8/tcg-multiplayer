@@ -166,6 +166,16 @@ namespace TcgMultiplayer.Game
             public readonly Dictionary<ushort, string> KeyNames = new Dictionary<ushort, string>(1024);
             public int KeyGen = -1;
             public bool StandInCapSaid;
+            public string Label;
+            /// <summary>
+            /// Where Render last put each body. If it's somewhere else by the
+            /// next frame, something on this side moved it after us — and every
+            /// counter upstream of here would still say the pose arrived.
+            /// </summary>
+            public readonly Dictionary<Rigidbody, Vector3> Wrote = new Dictionary<Rigidbody, Vector3>(512);
+            public int Overridden, Writes;
+            public string OverriddenExample;
+            public float OverriddenWorst;
         }
         private struct Snapshot
         {
@@ -727,6 +737,7 @@ namespace TcgMultiplayer.Game
             if (!_watched.TryGetValue(m.Id, out w))
             {
                 w = new Watched();
+                w.Label = m.Label;
                 _watched[m.Id] = w;
             }
 
@@ -1081,11 +1092,81 @@ namespace TcgMultiplayer.Game
                     var t = w.Targets[i];
                     if (t.At <= 0f) continue;
 
+                    var tr = rb.transform;
+                    Vector3 last;
+                    if (w.Wrote.TryGetValue(rb, out last))
+                    {
+                        float off = (tr.position - last).magnitude;
+                        if (off > 0.001f)
+                        {
+                            w.Overridden++;
+                            if (off > w.OverriddenWorst)
+                            {
+                                w.OverriddenWorst = off;
+                                w.OverriddenExample = rb.name;
+                            }
+                        }
+                    }
+
                     float k = InterpDelay <= 0f ? 1f : Mathf.Clamp01((now - t.At) / InterpDelay);
-                    rb.transform.position = Vector3.Lerp(t.FromPos, t.Pos, k);
-                    rb.transform.rotation = Quaternion.Slerp(t.FromRot, t.Rot, k);
+                    tr.position = Vector3.Lerp(t.FromPos, t.Pos, k);
+                    tr.rotation = Quaternion.Slerp(t.FromRot, t.Rot, k);
+                    w.Wrote[rb] = tr.position;
+                    w.Writes++;
                 }
             }
+
+            if (now >= _nextSeenAt)
+            {
+                _nextSeenAt = now + SummaryEvery;
+                foreach (var kv in _watched) SaySeen(kv.Value);
+            }
+        }
+
+        private float _nextSeenAt;
+
+        /// <summary>
+        /// "Watching X: N bodies came in" counts what arrived. It can't tell
+        /// you whether anyone could see it, and a watcher looking at a dead
+        /// machine while every counter said ok is exactly how 0.16.7 got
+        /// reported. So this asks the picture itself: of the bodies we're
+        /// placing, how many are switched on, how many have a renderer on, how
+        /// many a camera is actually drawing — and did something on this side
+        /// move them back after we placed them.
+        /// </summary>
+        private void SaySeen(Watched w)
+        {
+            int placed = 0, active = 0, drawn = 0, onCamera = 0;
+            for (int i = 0; i < w.Aligned.Count && i < w.Targets.Count; i++)
+            {
+                var rb = w.Aligned[i];
+                if (rb == null || w.Targets[i].At <= 0f) continue;
+                placed++;
+                if (!rb.gameObject.activeInHierarchy) continue;
+                active++;
+                bool anyOn = false, anySeen = false;
+                var rs = rb.GetComponentsInChildren<Renderer>(false);
+                for (int r = 0; r < rs.Length; r++)
+                {
+                    if (rs[r] == null || !rs[r].enabled) continue;
+                    anyOn = true;
+                    if (rs[r].isVisible) { anySeen = true; break; }
+                }
+                if (anyOn) drawn++;
+                if (anySeen) onCamera++;
+            }
+            if (placed == 0 && w.Writes == 0) return;
+
+            float fps = Time.unscaledDeltaTime > 0f ? 1f / Time.unscaledDeltaTime : 0f;
+            Plugin.Log("Seen on " + (w.Label ?? "?") + ": " + placed + " placed, " + active + " switched on, "
+                       + drawn + " with a renderer on, " + onCamera + " on a camera. "
+                       + (w.Overridden > 0
+                          ? w.Overridden + " times something here moved a body after we placed it (worst " + w.OverriddenWorst.ToString("0.00")
+                            + " m, " + w.OverriddenExample + ")"
+                          : "Nothing here moved them after we did")
+                       + ". " + w.Writes + " writes. This window: " + fps.ToString("0") + " fps, "
+                       + (Application.isFocused ? "focused" : "not focused") + ".");
+            w.Overridden = 0; w.Writes = 0; w.OverriddenWorst = 0f; w.OverriddenExample = null;
         }
 
         /// <summary>Hands the machine back to local physics when we stop spectating it.</summary>

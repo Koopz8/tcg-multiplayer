@@ -570,6 +570,7 @@ namespace TcgMultiplayer.Game
             {
                 Unfreeze(m);
                 Physics.ReleaseMachine(m.Id); Screen.Release(m.Id);    // local simulation resumes
+                _staleSaid.Remove(m.Id);
                 Movers.Release(m.Id);
 
                 // Nobody is driving, so nobody is a passenger. Everyone gets put
@@ -1480,6 +1481,7 @@ namespace TcgMultiplayer.Game
             Machine m;
             if (!_registry.TryGet(machineId, out m)) return;
             if (m.OwnedByMe) return;
+            if (StaleStream(m, from, "screen")) return;
             Screen.Apply(m, payload);
         }
 
@@ -1488,8 +1490,30 @@ namespace TcgMultiplayer.Game
             Machine m;
             if (!_registry.TryGet(machineId, out m)) return;
             if (m.OwnedByMe) return;             // we're the one simulating it
+            if (StaleStream(m, from, "physics")) return;
             Physics.Unpack(m, payload);
         }
+
+        /// <summary>
+        /// A stream packet from someone who doesn't hold the machine. These
+        /// are stragglers — the unreliable channel is still delivering what
+        /// was sent just before the hand-back — and applying one after the
+        /// release started spectating all over again: in the 0.16.7 run a
+        /// packet landed a millisecond after "Machine free", froze the whole
+        /// cabinet kinematic with its colliders off, and it stayed like that
+        /// until the next lease happened to clear it. Dropped and counted.
+        /// </summary>
+        private bool StaleStream(Machine m, CSteamID from, string what)
+        {
+            if (m.Owner != 0 && m.Owner == from.m_SteamID) return false;
+            StaleStreamPackets++;
+            if (_staleSaid.Add(m.Id))
+                Plugin.Log("Dropped a " + what + " packet for " + m.Label + " from someone who doesn't hold it ("
+                           + (m.Owner == 0 ? "it's free" : "it's " + m.OwnerName + "'s") + ") - a straggler from before the hand-back.");
+            return true;
+        }
+        public int StaleStreamPackets;
+        private readonly HashSet<uint> _staleSaid = new HashSet<uint>();
 
         /// <summary>The genuine spectator path, reachable by Rehearsal so a solo
         /// test exercises the same code a real peer would.</summary>
