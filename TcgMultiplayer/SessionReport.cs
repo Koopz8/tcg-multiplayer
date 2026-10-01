@@ -196,6 +196,11 @@ namespace TcgMultiplayer
                             ? ", " + m.Items.CarryMisses + " arrived before we had a body to hang them on" : ""));
                 sb.AppendLine();
 
+                if (m.RoundsBlockedByOwner > 0)
+                    Line("   rounds that couldn't run", m.RoundsBlockedByOwner
+                         + "   <-- you started a machine somebody else still held");
+                sb.AppendLine();
+
                 sb.AppendLine("Your money");
                 if (!m.Wallet.Available) sb.AppendLine("   economy globals were never readable");
                 else

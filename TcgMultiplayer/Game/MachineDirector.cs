@@ -170,11 +170,39 @@ namespace TcgMultiplayer.Game
                 var state = __instance.Name;
                 if (Occupancy.IsClaim(state))
                 {
+                    // Starting a round on a machine somebody else holds. Their
+                    // round is what gets drawn here, so ours is muted and the
+                    // player sees a cabinet that spawns nothing and does
+                    // nothing — which is what it looks like from the inside
+                    // when a lease is stuck. Worth saying out loud: a silent
+                    // dead machine is indistinguishable from a bug in the game.
+                    if (m.Owner != 0 && !m.OwnedByMe)
+                    {
+                        live.RoundsBlockedByOwner++;
+                        if (live._blockedSaid.Add(m.Id))
+                            Plugin.Warn("You've started " + m.Label + " but "
+                                        + (string.IsNullOrEmpty(m.OwnerName) ? "someone else" : m.OwnerName)
+                                        + " still has it, so this round won't run here. It frees up when "
+                                        + "they walk away or the machine goes quiet.");
+                    }
+
                     m.LocallyOccupied = true;
                     live._awaySince = -1f;
                     live._watchStates.Add(m.Id);
                     live.RequestClaim(m);
                 }
+
+                // A departure state no longer ends the lease by itself, but it
+                // is allowed to ASK. Pressing Exit Machine and standing there is
+                // the one case neither other rule covers — you haven't walked
+                // off and the twelve-second idle timer hasn't run — and it cost
+                // somebody a card: they walked up to a cabinet whose last player
+                // had finished with it, started a round, and got a dead machine
+                // with no nuggets in it. What turns the request into a release
+                // is the machine going still, which is evidence rather than a
+                // name. See TickHandBack.
+                if (Occupancy.LooksLikeLeaving(state) && m.OwnedByMe)
+                    live._leavingSince = Time.time;
 
                 // Ending the lease on a state name has now been wrong twice, in
                 // both directions, and each time it silently switched spectating
@@ -378,6 +406,7 @@ namespace TcgMultiplayer.Game
             TickStuckPose(rigNow);
             TickWalkedAway(rigNow);
             TickIdleRelease();
+            TickHandBack();
 
             if (Rehearse.Playing)
             {
@@ -933,6 +962,11 @@ namespace TcgMultiplayer.Game
         }
 
         private float _awaySince = -1f;
+        private float _leavingSince = -1f;
+        /// <summary>How long a machine must be still after you say you're done.</summary>
+        private const float HandBackAfterLeaving = 2f;
+        public int RoundsBlockedByOwner;
+        private readonly HashSet<uint> _blockedSaid = new HashSet<uint>();
 
         /// <summary>
         /// When the machine we own last had anything actually move in it.
@@ -968,7 +1002,18 @@ namespace TcgMultiplayer.Game
             }
 
             Machine m;
-            if (!_registry.TryGet(MyMachine, out m) || !m.OwnedByMe || m.Moving == null)
+            if (!_registry.TryGet(MyMachine, out m) || !m.OwnedByMe)
+            {
+                _awaySince = -1f;
+                return;
+            }
+
+            // Moving is the part of a vehicle that travels, and a cabinet
+            // hasn't got one — so this rule has never once fired for a cabinet,
+            // and walking off from a coin pusher left it locked to you. Its own
+            // root is where it is.
+            var where = m.Moving != null ? m.Moving : m.Root;
+            if (where == null)
             {
                 _awaySince = -1f;
                 return;
@@ -982,7 +1027,7 @@ namespace TcgMultiplayer.Game
                 return;
             }
 
-            if (!Occupancy.WalkedAway(Vector3.Distance(rig.Mesh.position, m.Moving.position)))
+            if (!Occupancy.WalkedAway(Vector3.Distance(rig.Mesh.position, where.position)))
             {
                 _awaySince = -1f;
                 return;
@@ -1020,6 +1065,30 @@ namespace TcgMultiplayer.Game
             m.LocallyOccupied = false;
             Plugin.Log("Giving " + m.Label + " back - nothing in it has moved for "
                        + IdleRelease + "s, so you're done with it.");
+            ReleaseIfMine(m);
+        }
+
+        /// <summary>
+        /// You said you were finished with it and nothing in it has moved
+        /// since. Two seconds is long enough for a pusher's mech to wind down
+        /// and short enough that the next person isn't left feeding a card into
+        /// a machine that still belongs to you.
+        /// </summary>
+        private void TickHandBack()
+        {
+            if (_leavingSince < 0f || MyMachine == 0) return;
+
+            Machine m;
+            if (!_registry.TryGet(MyMachine, out m) || !m.OwnedByMe) { _leavingSince = -1f; return; }
+            if (RidingMachine == m.Id || Ride.Riding == m.Id) { _leavingSince = -1f; return; }
+
+            // Still running? Then whatever that state meant, it wasn't the end.
+            if (Physics.SentMovedLastPacket > 0) { _leavingSince = -1f; return; }
+            if (Time.time - _leavingSince < HandBackAfterLeaving) return;
+
+            _leavingSince = -1f;
+            m.LocallyOccupied = false;
+            Plugin.Log("Giving " + m.Label + " back - you're done with it and nothing in it is moving.");
             ReleaseIfMine(m);
         }
 
