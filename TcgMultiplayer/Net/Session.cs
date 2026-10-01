@@ -12,6 +12,8 @@ namespace TcgMultiplayer.Net
         public CSteamID Id;
         public string Name = "?";
         public string ModVersion = "";
+        /// <summary>The name of their character's mesh object, from the handshake. Empty = an older build that doesn't send one.</summary>
+        public string Character = "";
         public bool Handshaked;
         public float RttMs = -1f;
         public double LastHeardAt;
@@ -844,17 +846,21 @@ namespace TcgMultiplayer.Net
                         case Op.Hello:
                             peer.Name = pr.Str();
                             peer.ModVersion = pr.Str();
+                            if (pr.More) peer.Character = pr.Str();
                             peer.Handshaked = true;
-                            Log("Handshake with " + peer.Name + " (mod " + peer.ModVersion + ")");
+                            Log("Handshake with " + peer.Name + " (mod " + peer.ModVersion + ")"
+                                + (peer.Character.Length > 0 ? ", playing as " + peer.Character : ""));
                             SendOn(peer, Op.HelloAck, SteamTransport.ChannelControl, true,
-                                   w => w.Str(SelfName).Str(Plugin.Version));
+                                   w => w.Str(SelfName).Str(Plugin.Version).Str(Game.PlayerRig.LocalCharacter));
                             break;
 
                         case Op.HelloAck:
                             peer.Name = pr.Str();
                             peer.ModVersion = pr.Str();
+                            if (pr.More) peer.Character = pr.Str();
                             peer.Handshaked = true;
-                            Log("Connected to " + peer.Name + " (mod " + peer.ModVersion + ")");
+                            Log("Connected to " + peer.Name + " (mod " + peer.ModVersion + ")"
+                                + (peer.Character.Length > 0 ? ", playing as " + peer.Character : ""));
                             // Now that we can talk, pull the host's island down so we
                             // arrive in their world rather than our own.
                             if (!_wasHostAtJoin) RequestWorldSnapshot();
@@ -1031,7 +1037,7 @@ namespace TcgMultiplayer.Net
         {
             _net.AcceptSession(p.Id);
             SendOn(p, Op.Hello, SteamTransport.ChannelControl, true,
-                   w => w.Str(SelfName).Str(Plugin.Version));
+                   w => w.Str(SelfName).Str(Plugin.Version).Str(Game.PlayerRig.LocalCharacter));
         }
 
         private void Send(Peer p, Op op, Action<PacketWriter> fill)

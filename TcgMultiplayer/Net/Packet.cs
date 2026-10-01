@@ -102,6 +102,16 @@ namespace TcgMultiplayer.Net
         public byte U8() { return _r.ReadByte(); }
         public byte[] Bytes() { int n = _r.ReadUInt16(); return n == 0 ? null : _r.ReadBytes(n); }
 
+        /// <summary>
+        /// Is there payload left? Lets a field be ADDED to an existing packet
+        /// without older peers' packets throwing as they're read - which
+        /// matters for Hello above all, because Hello is what carries the
+        /// version number the mismatch warning is built from. Throw while
+        /// reading it and the player gets a dead connection instead of
+        /// "you're on 0.12.3, they're on 0.12.4".
+        /// </summary>
+        public bool More { get { return _ms.Position < _ms.Length; } }
+
         public void Dispose() { _r.Close(); _ms.Dispose(); }
     }
 }

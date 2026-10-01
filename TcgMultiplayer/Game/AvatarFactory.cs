@@ -6,7 +6,7 @@ using UnityEngine;
 namespace TcgMultiplayer.Game
 {
     /// <summary>
-    /// Builds a remote player body by cloning "PLAYER/LARRY Mesh" and stripping
+    /// Builds a remote player body by cloning the mesh under PLAYER and stripping
     /// everything that would make the clone behave like a player.
     ///
     /// Stripping is the whole job. The rig carries PlayMaker graphs, IK
@@ -17,6 +17,107 @@ namespace TcgMultiplayer.Game
     internal static class AvatarFactory
     {
         private static bool _loggedAnimatorParams;
+
+        private static readonly Dictionary<string, GameObject> _sources = new Dictionary<string, GameObject>();
+        private static readonly HashSet<string> _missReported = new HashSet<string>();
+
+        /// <summary>
+        /// What to clone to show a peer who picked character
+        /// <paramref name="character"/>.
+        ///
+        /// Every player used to be cloned from the LOCAL player's mesh, so if
+        /// you were Mandy everyone in the lobby was Mandy. Nobody noticed in
+        /// the two-window test, because both windows load the same save - but
+        /// the character is picked at the title screen, so two real people
+        /// are usually two different ones.
+        ///
+        /// Their character's model is only clonable if the game still has it
+        /// loaded once you're in the arcade. The picker's pedestal models get
+        /// destroyed when you leave the title screen, but the assets behind
+        /// them may well still be in memory, which is how a ticket pile gets
+        /// shown to someone who never spawned one. If it isn't there, we fall
+        /// back to the old behaviour and say so rather than showing nothing.
+        /// </summary>
+        public static Transform SourceFor(string character, Transform myMesh)
+        {
+            if (myMesh == null) return null;
+            if (string.IsNullOrEmpty(character) || character == myMesh.name) return myMesh;
+
+            GameObject cached;
+            if (_sources.TryGetValue(character, out cached) && cached != null) return cached.transform;
+
+            var found = FindCharacter(character);
+            if (found != null)
+            {
+                _sources[character] = found;
+                Plugin.Log("Character \"" + character + "\": cloning " + found.name
+                           + (found.scene.IsValid() ? " (live in the scene)" : " (loaded asset)") + ".");
+                return found.transform;
+            }
+
+            if (_missReported.Add(character))
+                Plugin.Warn("Nothing loaded called \"" + character + "\", so they'll look like "
+                            + myMesh.name + " for now. Character-ish models in memory: " + Candidates());
+            return myMesh;
+        }
+
+        /// <summary>
+        /// By exact name first, then without the " Mesh" suffix, since the
+        /// asset behind "MANDY Mesh" may just be called "MANDY". Prefers an
+        /// asset over a scene object: a scene one could be another player's
+        /// avatar we built earlier, and cloning a clone compounds any mistake.
+        /// </summary>
+        private static GameObject FindCharacter(string character)
+        {
+            string bare = character.EndsWith(" Mesh", StringComparison.OrdinalIgnoreCase)
+                        ? character.Substring(0, character.Length - 5) : null;
+
+            GameObject sceneHit = null;
+            try
+            {
+                var all = Resources.FindObjectsOfTypeAll<GameObject>();
+                for (int pass = 0; pass < 2; pass++)
+                {
+                    string want = pass == 0 ? character : bare;
+                    if (want == null) continue;
+                    for (int i = 0; i < all.Length; i++)
+                    {
+                        var go = all[i];
+                        if (go == null || go.name != want) continue;
+                        if (go.name.StartsWith("TCGMP_", StringComparison.Ordinal)) continue;
+                        if (go.GetComponentInChildren<SkinnedMeshRenderer>(true) == null) continue;
+                        if (!go.scene.IsValid() && go.transform.parent == null) return go;
+                        if (sceneHit == null) sceneHit = go;
+                    }
+                }
+            }
+            catch { }
+            return sceneHit;
+        }
+
+        /// <summary>Named so a single test run says what WAS available, instead of only what wasn't.</summary>
+        private static string Candidates()
+        {
+            var sb = new StringBuilder();
+            int n = 0;
+            try
+            {
+                var all = Resources.FindObjectsOfTypeAll<GameObject>();
+                var seen = new HashSet<string>();
+                for (int i = 0; i < all.Length && n < 12; i++)
+                {
+                    var go = all[i];
+                    if (go == null || go.transform.parent != null) continue;
+                    if (go.name.StartsWith("TCGMP_", StringComparison.Ordinal)) continue;
+                    if (go.GetComponentInChildren<SkinnedMeshRenderer>(true) == null) continue;
+                    if (!seen.Add(go.name)) continue;
+                    sb.Append(n > 0 ? ", " : "").Append(go.name);
+                    n++;
+                }
+            }
+            catch { }
+            return n == 0 ? "(none found)" : sb.ToString();
+        }
 
         public static GameObject Build(Transform sourceMesh, string label)
         {

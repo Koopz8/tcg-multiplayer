@@ -40,6 +40,15 @@ namespace TcgMultiplayer.Game
         private float _nextMeshWarnAt;
 
         /// <summary>
+        /// Which character this player picked, by the name of their mesh
+        /// object - "LARRY Mesh", "MANDY Mesh". It's chosen at the title
+        /// screen each launch, so it can't be read from the save; the live
+        /// object is the only thing that knows. Static because the session
+        /// sends it in the handshake and has no reason to hold a rig.
+        /// </summary>
+        public static string LocalCharacter = "";
+
+        /// <summary>
         /// The player's body under PLAYER. It was looked up by the name
         /// "LARRY Mesh", which is what it's called when you play as Larry —
         /// and the first two people to try the mod in the wild weren't
@@ -95,6 +104,7 @@ namespace TcgMultiplayer.Game
                 }
                 return false;
             }
+            LocalCharacter = Mesh.name;
             if (Mesh.name != MeshChild)
                 Plugin.Log("Player mesh is '" + Mesh.name + "' (not '" + MeshChild + "') — a different character; using it.");
 

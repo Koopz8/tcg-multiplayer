@@ -174,8 +174,31 @@ namespace TcgMultiplayer.Game
             if (!_avatars.TryGetValue(key, out av))
             {
                 if (!_rig.Valid) return;   // nothing to clone from yet
+
+                // Show them as the character THEY picked, not as whoever we
+                // happen to be playing. Their handshake said which one.
+                //
+                // Positions ride the unreliable channel and the handshake the
+                // reliable one, so a position CAN arrive first. Spawning then
+                // would clone the wrong body and cache it for the whole
+                // session, so a peer we know about but haven't handshaked
+                // with yet waits a beat. The mirror's fake peer isn't in the
+                // list at all, and still spawns immediately.
+                string character = "";
+                bool known = false;
+                foreach (var p in _session.Peers)
+                    if (p.Id.m_SteamID == key)
+                    {
+                        known = true;
+                        if (!p.Handshaked) return;
+                        character = p.Character;
+                        break;
+                    }
+                if (!known) character = "";
+
+                var source = AvatarFactory.SourceFor(character, _rig.Mesh);
                 av = new RemoteAvatar();
-                if (!av.Spawn(_rig.Mesh, label)) return;
+                if (!av.Spawn(source, label)) return;
                 _avatars[key] = av;
             }
             av.Label = label;
