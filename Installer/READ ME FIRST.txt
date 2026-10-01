@@ -37,7 +37,7 @@ IN GAME
 
   F11   Unstuck button. If you ever can't get off a machine, press this.
 
-  F7    Dumps technical info to a file. Only press it if Mason asks.
+  F7    Dumps technical info to a file. Only press it if Kooper asks.
 
 The panel needs the mouse, so it unlocks the cursor while it's open.
 Press F9 again to close it and get control back.

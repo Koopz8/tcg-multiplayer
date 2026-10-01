@@ -7,7 +7,7 @@ using TcgMultiplayer.Net;
 using TcgMultiplayer.Ui;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(TcgMultiplayer.Plugin), "TcgMultiplayer", TcgMultiplayer.Plugin.Version, "Mason")]
+[assembly: MelonInfo(typeof(TcgMultiplayer.Plugin), "TcgMultiplayer", TcgMultiplayer.Plugin.Version, "Kooper")]
 [assembly: MelonGame("devotid", "TheCoinGame")]
 
 namespace TcgMultiplayer
