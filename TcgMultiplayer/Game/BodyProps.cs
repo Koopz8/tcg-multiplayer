@@ -43,7 +43,7 @@ namespace TcgMultiplayer.Game
         public const int MaxNames = 250;
 
         public static int Switched, Applied, Skipped;
-        private static bool _toldOnce;
+        private static int _told;
 
         /// <summary>
         /// Every object that draws something, or contains something that draws,
@@ -71,12 +71,53 @@ namespace TcgMultiplayer.Game
                 var t = stack[i];
                 if (t == null) continue;
                 if (t.GetComponentInChildren<Renderer>(true) == null) continue;
-                var n = t.name;
+                var n = Key(t, root);
                 if (string.IsNullOrEmpty(n) || n.Length > 200) continue;
                 if (seenTwice.Contains(n)) continue;
                 if (into.ContainsKey(n)) { into.Remove(n); seenTwice.Add(n); continue; }
                 into[n] = t;
             }
+        }
+
+        /// <summary>
+        /// A part's name with its parent's in front of it. The bare name was not
+        /// enough: the tickets live in a group called "UnCountedTickets Group"
+        /// whose own switch we could see, but the piles inside it draw from
+        /// children called things like MESH — a name that appears all over a
+        /// character, so it was thrown out as ambiguous and never mirrored. The
+        /// group would come on over there with nothing inside it to show.
+        ///
+        /// Not the full path, which would be both long to send and fragile: the
+        /// live body has objects the asset never had, so paths further up differ
+        /// between the two. One step is enough to tell MESH from MESH and short
+        /// enough to send a hundred of them.
+        /// </summary>
+        /// <summary>
+        /// Bit 0: the object is switched on. Bit 1: its renderer is drawing.
+        /// Bit 2: it has no renderer of its own, so say nothing about drawing.
+        /// Switching the object off is not the only way the game hides what's in
+        /// your hand — it also just turns the renderer off, and a clone from the
+        /// asset arrives with it on.
+        /// </summary>
+        private static byte StateOf(Transform t)
+        {
+            byte flags = 0;
+            if (t == null) return 4;
+            if (t.gameObject.activeSelf) flags |= 1;
+            var rend = t.GetComponent<Renderer>();
+            if (rend == null) flags |= 4;
+            else if (rend.enabled) flags |= 2;
+            return flags;
+        }
+
+        private static readonly Dictionary<string, byte> _lastPacked = new Dictionary<string, byte>(128);
+        private static int _toldPack;
+
+        private static string Key(Transform t, Transform root)
+        {
+            var p = t.parent;
+            if (p == null || p == root) return t.name;
+            return p.name + "/" + t.name;
         }
 
         private static void Walk(Transform t, List<Transform> into)
@@ -97,6 +138,30 @@ namespace TcgMultiplayer.Game
             Collect(mesh, found);
             if (found.Count == 0) return null;
 
+            // What changed on OUR body since last time, said out loud. Without
+            // this there is no way to tell "the owner never noticed the tickets
+            // appear" from "the owner said so and the watcher ignored it", and
+            // guessing between those two has already cost two builds.
+            if (_toldPack < 20)
+            {
+                var flipped = new StringBuilder();
+                foreach (var kv in found)
+                {
+                    byte now = StateOf(kv.Value);
+                    byte was;
+                    if (_lastPacked.TryGetValue(kv.Key, out was) && was == now) continue;
+                    if (_lastPacked.Count > 0)
+                        flipped.Append(kv.Key).Append((now & 1) != 0 ? " on" : " off")
+                               .Append((now & 4) == 0 ? ((now & 2) != 0 ? "/drawn" : "/hidden") : "").Append("  ");
+                    _lastPacked[kv.Key] = now;
+                }
+                if (flipped.Length > 0)
+                {
+                    _toldPack++;
+                    Plugin.Log("On our own body: " + flipped);
+                }
+            }
+
             var ms = new System.IO.MemoryStream(1024);
             var w = new System.IO.BinaryWriter(ms, Encoding.UTF8);
             int n = found.Count < MaxNames ? found.Count : MaxNames;
@@ -109,16 +174,7 @@ namespace TcgMultiplayer.Game
                 if (name.Length > 200) { w.Write((byte)0); continue; }
                 w.Write((byte)name.Length);
                 w.Write(name);
-                var t = kv.Value;
-                byte flags = 0;
-                if (t != null && t.gameObject.activeSelf) flags |= 1;
-                // Switching the object off is not the only way the game hides a
-                // thing in your hand; it also just turns the renderer off. The
-                // clone comes from the asset with it on, which is a difference
-                // the object flag alone could never see.
-                var rend = t != null ? t.GetComponent<Renderer>() : null;
-                if (rend == null) flags |= 4;            // nothing to say about a renderer
-                else if (rend.enabled) flags |= 2;
+                byte flags = StateOf(kv.Value);
                 w.Write(flags);
             }
             return ms.ToArray();
@@ -153,7 +209,7 @@ namespace TcgMultiplayer.Game
 
             Applied++;
             int changed = 0;
-            StringBuilder said = _toldOnce ? null : new StringBuilder();
+            StringBuilder said = _told < 20 ? new StringBuilder() : null;
             foreach (var kv in mine)
             {
                 byte flags;
@@ -183,7 +239,7 @@ namespace TcgMultiplayer.Game
             }
             if (said != null && changed > 0)
             {
-                _toldOnce = true;
+                _told++;
                 Plugin.Log("Put right on their body: " + said);
             }
             Switched += changed;
@@ -245,6 +301,6 @@ namespace TcgMultiplayer.Game
             Plugin.Log("Body parts we can name, " + side + " (" + named.Count + "): " + sb);
         }
 
-        public static void Forget() { _toldOnce = false; }
+        public static void Forget() { _told = 0; _toldPack = 0; _lastPacked.Clear(); }
     }
 }

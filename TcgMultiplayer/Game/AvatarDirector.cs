@@ -147,7 +147,7 @@ namespace TcgMultiplayer.Game
                 if (mask != null && (!SameMask(mask, _sentProps) || Time.time >= _nextPropsResendAt))
                 {
                     _sentProps = mask;
-                    _nextPropsResendAt = Time.time + 2f;    // and for whoever just loaded in
+                    _nextPropsResendAt = Time.time + 10f;   // and for whoever just loaded in
                     _session.SendBodyProps(mask);
                 }
             }
