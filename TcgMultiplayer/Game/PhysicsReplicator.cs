@@ -159,6 +159,8 @@ namespace TcgMultiplayer.Game
             /// built once and reused. Destroyed on release.
             /// </summary>
             public readonly Dictionary<string, Rigidbody> StandIns = new Dictionary<string, Rigidbody>();
+            /// <summary>Built, but not yet told where it goes.</summary>
+            public readonly HashSet<Rigidbody> StandInWaiting = new HashSet<Rigidbody>();
             public readonly HashSet<string> StandInGaveUp = new HashSet<string>();
             /// <summary>Path per number, as the owner has defined them. See the key dictionary.</summary>
             public readonly Dictionary<ushort, string> KeyNames = new Dictionary<ushort, string>(1024);
@@ -558,6 +560,20 @@ namespace TcgMultiplayer.Game
             // The comparison is against the pose last SENT, not last frame, so
             // a body that moves and then stops has its final resting pose sent
             // once and is then quiet — which is the whole point.
+            // A keyframe forgets what it has sent, so it carries every pose
+            // again. 0.14.3 made manifests sparse along with everything else,
+            // and that quietly broke watching a machine at rest: the watcher
+            // builds a stand-in for each body it hasn't got, and a stand-in has
+            // no position until a pose for it arrives. On a pusher between
+            // rounds nothing moves, so 326 chests were created and then never
+            // placed — "0 of 332 bodies moved, 9 sent" one packet after a
+            // manifest that had just caused 326 of them to be built.
+            //
+            // This is what a keyframe is for. Every five seconds costs about a
+            // kilobyte a second on the heaviest cabinet in the arcade, and in
+            // exchange anything stranded for any reason fixes itself.
+            if (keyframe) { _sentPos.Clear(); _sentOn.Clear(); }
+
             int moved = 0;
             _send.Clear();
             const bool sparse = true;   // every packet names what it carries now
@@ -885,7 +901,7 @@ namespace TcgMultiplayer.Game
                     {
                         var srb = kv.Value;
                         if (srb == null) continue;
-                        bool wanted = w.AlignedSet.Contains(srb);
+                        bool wanted = w.AlignedSet.Contains(srb) && !w.StandInWaiting.Contains(srb);
                         if (srb.gameObject.activeSelf != wanted) srb.gameObject.SetActive(wanted);
                     }
                 }
@@ -1017,10 +1033,19 @@ namespace TcgMultiplayer.Game
                 if (rb.gameObject.activeSelf != on) SetActiveRemembering(w, rb.gameObject, on);
 
                 var t = w.Targets[i];
-                t.FromPos = rb.transform.position;
-                t.FromRot = rb.transform.rotation;
                 t.Pos = origin + rot * lp;
                 t.Rot = rot * Normalise(lr);
+
+                // The first pose a stand-in ever gets puts it there outright.
+                // Easing it in from wherever the prefab was would drag it across
+                // the room in front of everyone.
+                if (w.StandInWaiting.Remove(rb))
+                {
+                    rb.transform.position = t.Pos;
+                    rb.transform.rotation = t.Rot;
+                }
+                t.FromPos = rb.transform.position;
+                t.FromRot = rb.transform.rotation;
                 t.At = now;
                 applied++;
             }
@@ -1128,7 +1153,11 @@ namespace TcgMultiplayer.Game
             }
 
             go.name = OursPrefix + w.StandIns.Count;
-            go.SetActive(true);
+            // Off until a pose for it turns up. A stand-in has no idea where it
+            // belongs when it is made, and the prefab's own position is usually
+            // nowhere useful — three hundred chests appearing in a heap for a
+            // moment is worse than three hundred appearing a little late.
+            go.SetActive(false);
             AvatarFactory.Strip(go);
             try { go.transform.SetParent(m.Root, true); } catch { }
 
@@ -1141,6 +1170,7 @@ namespace TcgMultiplayer.Game
             rb.detectCollisions = false;
 
             w.StandIns[key] = rb;
+            w.StandInWaiting.Add(rb);
             StandInsBuilt++;
             if (StandInsBuilt <= 8)
                 Plugin.Log("Standing in for " + m.Label + "'s " + prefab + " — the owner's round spawned it and ours didn't.");
