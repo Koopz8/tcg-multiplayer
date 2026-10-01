@@ -123,6 +123,26 @@ namespace TcgMultiplayer
                 Line("packets", s.PacketsSent + " sent, " + s.PacketsReceived + " received");
                 Line("data", (s.BytesSent / 1024) + " KB sent, " + (s.BytesReceived / 1024) + " KB received");
 
+                // What the bytes actually were. Before this the totals only
+                // counted the handful of packets that went through SendOn, so
+                // the heavy traffic - positions, coin poses, the cabinet
+                // screen - was invisible and a busy session looked free.
+                {
+                    var secs = dur.TotalSeconds > 1 ? dur.TotalSeconds : 1;
+                    var names = System.Enum.GetNames(typeof(Net.Op));
+                    var values = (Net.Op[])System.Enum.GetValues(typeof(Net.Op));
+                    bool any = false;
+                    for (int i = 0; i < values.Length; i++)
+                    {
+                        int op = (int)values[i];
+                        if (op < 0 || op >= 64 || s.BytesOutByOp[op] <= 0) continue;
+                        if (!any) { sb.AppendLine("   what was sent:"); any = true; }
+                        Line("      " + names[i],
+                             (s.BytesOutByOp[op] / 1024) + " KB over " + s.PacketsOutByOp[op] + " packets"
+                             + "  (" + (s.BytesOutByOp[op] / secs / 1024).ToString("0.0") + " KB/s)");
+                    }
+                }
+
                 if (!string.IsNullOrEmpty(s.BuildMismatch)) Line("BUILD MISMATCH", s.BuildMismatch);
                 if (!string.IsNullOrEmpty(s.RefusedReason)) Line("REFUSED", s.RefusedReason);
 
@@ -150,6 +170,17 @@ namespace TcgMultiplayer
                 Line("   count mismatches", m.Physics.CountMismatches
                      + (m.Physics.CountMismatches > 0 ? "   <-- the two sides disagreed about a machine" : ""));
                 sb.AppendLine();
+
+                // One row per cabinet you watched somebody else play. Only two
+                // machine types have ever been checked by eye, so this is how
+                // the other twenty-eight get checked.
+                var watched = m.Watch.Text();
+                if (watched != null)
+                {
+                    sb.AppendLine("Machines you watched someone else play");
+                    sb.Append(watched);
+                    sb.AppendLine();
+                }
 
                 sb.AppendLine("Your money");
                 if (!m.Wallet.Available) sb.AppendLine("   economy globals were never readable");

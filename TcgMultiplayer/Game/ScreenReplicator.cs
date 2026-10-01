@@ -75,6 +75,9 @@ namespace TcgMultiplayer.Game
         }
         private readonly Dictionary<uint, Watched> _watched = new Dictionary<uint, Watched>();
 
+        /// <summary>Per-machine spectating summary; see WatchReport.</summary>
+        public WatchReport Report;
+
         public int FieldsFound, Sent, Applied, Unmatched, Moves, MovesOverridden;
         private int _moveLogs;
         private const int MoveLogCap = 12;
@@ -334,6 +337,7 @@ namespace TcgMultiplayer.Game
             }
             Applied += applied;
             Unmatched += missing;
+            if (Report != null) Report.Screen(m.Id, w.ByKey.Count, applied);
         }
 
         private static void SetActiveRemembering(Watched w, GameObject go, bool on)

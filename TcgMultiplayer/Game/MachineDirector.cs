@@ -40,6 +40,7 @@ namespace TcgMultiplayer.Game
         public readonly Rehearsal Rehearse = new Rehearsal();
         public readonly PhysicsReplicator Physics = new PhysicsReplicator();
         public readonly ScreenReplicator Screen = new ScreenReplicator();
+        public readonly WatchReport Watch = new WatchReport();
         public readonly LooseItems Items = new LooseItems();
 
         /// <summary>Vehicles: the world pose of whatever is being driven.</summary>
@@ -95,6 +96,8 @@ namespace TcgMultiplayer.Game
             _session.OnMachineClaim += OnClaimRequest;
             _session.OnMachineOwner += OnOwnerAnnounced;
             _session.OnMachineEvent += OnMirroredEvent;
+            Physics.Report = Watch;
+            Screen.Report = Watch;
             _session.OnMachinePhysics += OnPhysics;
             _session.OnMachineScreen += OnScreen;
             _session.OnLooseItem += (from, payload) => Items.Receive(from.m_SteamID, payload);
@@ -321,6 +324,7 @@ namespace TcgMultiplayer.Game
                 if (_registry.TryGet(MyMachine, out mine) && mine.OwnedByMe)
                 {
                     var payload = Physics.Pack(mine);
+                    if (Physics.SentMovedLastPacket > 0) _lastOwnMotionAt = Time.time;
                     if (payload != null)
                     {
                         // Recorded offline too, so a rehearsal replays the coins.
@@ -373,6 +377,7 @@ namespace TcgMultiplayer.Game
             TickRide();
             TickStuckPose(rigNow);
             TickWalkedAway(rigNow);
+            TickIdleRelease();
 
             if (Rehearse.Playing)
             {
@@ -522,6 +527,7 @@ namespace TcgMultiplayer.Game
             if (m.Id == MyMachine && !m.OwnedByMe) MyMachine = 0;
             if (m.OwnedByMe)
             {
+                if (MyMachine != m.Id) _lastOwnMotionAt = Time.time;
                 MyMachine = m.Id;
                 Physics.ReleaseMachine(m.Id); Screen.Release(m.Id);
                 Movers.Release(m.Id);            // we drive it now, nobody streams it to us
@@ -929,6 +935,21 @@ namespace TcgMultiplayer.Game
         private float _awaySince = -1f;
 
         /// <summary>
+        /// When the machine we own last had anything actually move in it.
+        ///
+        /// Ownership only ended at twelve metres, so standing at a cabinet
+        /// after taking your card out kept it locked to you and kept everyone
+        /// else's spectate view open on a dead machine. Ending it on a state
+        /// name was tried and is a trap - twice a name that sounded like
+        /// leaving ended a round two seconds in - so this watches whether the
+        /// moving parts are still moving instead, which no name can lie
+        /// about. Attract-mode events keep firing after a round, so events
+        /// are no use as a signal; motion stops.
+        /// </summary>
+        private float _lastOwnMotionAt = -1f;
+        private const float IdleRelease = 12f;
+
+        /// <summary>
         /// Give back a machine you have plainly walked off from.
         ///
         /// The lease now ends only on states that mean leaving, which is right
@@ -973,6 +994,32 @@ namespace TcgMultiplayer.Game
             _awaySince = -1f;
             m.LocallyOccupied = false;
             Plugin.Log("Giving " + m.Label + " back — you've walked away from it.");
+            ReleaseIfMine(m);
+        }
+
+        /// <summary>
+        /// Hand a machine back once its moving parts have been still for a
+        /// while - you're done, you're just standing there.
+        ///
+        /// Only for machines that HAVE moving parts. A vending machine or a
+        /// Speed Drop never moves anything, so "nothing moved" says nothing
+        /// about whether it's being played; those keep the distance rule
+        /// alone.
+        /// </summary>
+        private void TickIdleRelease()
+        {
+            if (MyMachine == 0 || _lastOwnMotionAt < 0f) return;
+            if (Time.time - _lastOwnMotionAt < IdleRelease) return;
+
+            Machine m;
+            if (!_registry.TryGet(MyMachine, out m) || !m.OwnedByMe) return;
+            if (m.BodyCount <= 0) return;
+            if (RidingMachine == m.Id || Ride.Riding == m.Id) return;
+
+            _lastOwnMotionAt = -1f;
+            m.LocallyOccupied = false;
+            Plugin.Log("Giving " + m.Label + " back - nothing in it has moved for "
+                       + IdleRelease + "s, so you're done with it.");
             ReleaseIfMine(m);
         }
 
@@ -1448,10 +1495,12 @@ namespace TcgMultiplayer.Game
                 // those two run costs no coins and may bring the screen back.
                 if (!IsDisplayFsm(objName))
                 {
+                    Watch.Event(m.Id, false);
                     if (seen == 0 && _mutedByFsm.Count <= MutedLogCap)
                         Plugin.Log("Muted on " + m.Label + ": " + who);
                     return;
                 }
+                Watch.Event(m.Id, true);
                 if (seen == 0) Plugin.Log("Let through on " + m.Label + ": " + who);
             }
 

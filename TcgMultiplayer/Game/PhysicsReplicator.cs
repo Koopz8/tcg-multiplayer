@@ -195,6 +195,9 @@ namespace TcgMultiplayer.Game
         }
 
         // ------------------------------------------------------------ counters
+        /// <summary>Per-machine spectating summary, so a sweep of the arcade writes itself down.</summary>
+        public WatchReport Report;
+
         public int BodiesSent, BodiesApplied, CountMismatches, ManifestsSent, ManifestsReceived, WaitingForManifest;
         public float LastPacketBytes;
         public float SendRate = 20f;
@@ -561,6 +564,7 @@ namespace TcgMultiplayer.Game
 
                 w.HaveManifest = true;
                 w.Matched = matched;
+                if (Report != null) Report.Bodies(m.Id, m.Label, _scratch.Count, count, matched);
                 w.Unmatched = count - matched;
                 while (w.Targets.Count < count) w.Targets.Add(new Target());
 
@@ -663,6 +667,7 @@ namespace TcgMultiplayer.Game
             RecvPosesLastPacket = count;
             RecvChangedLastPacket = changed;
             if (changed > RecvChangedPeak) RecvChangedPeak = changed;
+            if (Report != null) Report.Packet(m.Id, changed);
             if (now >= _nextRecvSummaryAt)
             {
                 _nextRecvSummaryAt = now + SummaryEvery;

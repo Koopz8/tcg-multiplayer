@@ -94,6 +94,32 @@ namespace TcgMultiplayer.Net
         // something you can act on.
         public int PacketsSent, PacketsReceived;
         public long BytesSent, BytesReceived;
+
+        /// <summary>
+        /// Bytes and packets out, by opcode.
+        ///
+        /// Worth having because the totals were a lie: every broadcast -
+        /// positions, machine physics, the cabinet screen, loose items -
+        /// sends straight down the transport and skipped the counters in
+        /// SendOn, so a session that shifted megabytes of coin poses
+        /// reported three kilobytes sent. The breakdown is the point as much
+        /// as the total; "is this too heavy" is really "which op is heavy".
+        /// </summary>
+        public readonly long[] BytesOutByOp = new long[64];
+        public readonly int[] PacketsOutByOp = new int[64];
+
+        private void CountSent(Op op, int lenEach, int copies)
+        {
+            if (copies <= 0) return;
+            int i = (int)op;
+            PacketsSent += copies;
+            BytesSent += (long)lenEach * copies;
+            if (i >= 0 && i < 64)
+            {
+                PacketsOutByOp[i] += copies;
+                BytesOutByOp[i] += (long)lenEach * copies;
+            }
+        }
         public DateTime StartedAt;
         public int PeakPeers;
 
@@ -250,6 +276,7 @@ namespace TcgMultiplayer.Net
             {
                 WritePlayerState(w, st, seq);
                 var bytes = w.ToArray();
+                CountSent(Op.PlayerState, bytes.Length, Peers.Count);
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelState, false);
             }
@@ -311,6 +338,7 @@ namespace TcgMultiplayer.Net
                 var bytes = w.ToArray();
                 // Reliable and ordered: a dropped machine event desyncs the cabinet
                 // for the rest of the round, unlike a dropped position snapshot.
+                CountSent(Op.MachineEvent, bytes.Length, Peers.Count);
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
             }
@@ -328,6 +356,7 @@ namespace TcgMultiplayer.Net
             {
                 w.U32(machineId).Bytes(payload);
                 var bytes = w.ToArray();
+                CountSent(Op.MachinePhysics, bytes.Length, Peers.Count);
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelState, false);
             }
@@ -342,6 +371,7 @@ namespace TcgMultiplayer.Net
                 var bytes = w.ToArray();
                 // Reliable: a score that skips a beat is fine, a score that
                 // never arrives is a blank screen.
+                CountSent(Op.MachineScreen, bytes.Length, Peers.Count);
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
             }
@@ -362,6 +392,7 @@ namespace TcgMultiplayer.Net
             {
                 w.Str(character ?? "");
                 var bytes = w.ToArray();
+                CountSent(Op.Character, bytes.Length, Peers.Count);
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
             }
@@ -374,6 +405,7 @@ namespace TcgMultiplayer.Net
             {
                 w.Bytes(payload);
                 var bytes = w.ToArray();
+                CountSent(Op.LooseItem, bytes.Length, Peers.Count);
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, reliable ? SteamTransport.ChannelControl : SteamTransport.ChannelState, reliable);
             }
@@ -424,6 +456,7 @@ namespace TcgMultiplayer.Net
                  .F32(pose.Vel.x).F32(pose.Vel.y).F32(pose.Vel.z)
                  .U8(pose.BodyUp);
                 var bytes = w.ToArray();
+                CountSent(Op.ObjectState, bytes.Length, Peers.Count);
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelState, false);
             }
@@ -470,6 +503,7 @@ namespace TcgMultiplayer.Net
             {
                 w.I32(coins).I32(tickets).I32(session);
                 var bytes = w.ToArray();
+                CountSent(Op.Wallet, bytes.Length, Peers.Count);
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
             }
@@ -500,12 +534,14 @@ namespace TcgMultiplayer.Net
                     foreach (var p in Peers)
                     {
                         if (onlyTo.HasValue && p.Id != onlyTo.Value) continue;
+                        CountSent(Op.WorldVar, bytes.Length, 1);
                         _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
                     }
                 }
                 else
                 {
                     var host = HostPeer();
+                    CountSent(Op.WorldVar, bytes.Length, 1);
                     if (host != null) _net.Send(host.Id, bytes, SteamTransport.ChannelControl, true);
                 }
             }
@@ -1085,8 +1121,7 @@ namespace TcgMultiplayer.Net
             {
                 if (fill != null) fill(w);
                 var bytes = w.ToArray();
-                PacketsSent++;
-                BytesSent += bytes.Length;
+                CountSent(op, bytes.Length, 1);
                 _net.Send(p.Id, bytes, channel, reliable);
             }
         }
