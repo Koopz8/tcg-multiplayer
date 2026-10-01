@@ -26,7 +26,7 @@ namespace TcgMultiplayer.Game
         private readonly List<ulong> _scratch = new List<ulong>();
         private string _announcedCharacter = "";
         private byte[] _sentProps;
-        private float _nextPropsAt, _nextPropsResendAt;
+        private float _nextPropsAt, _nextPropsResendAt, _nextReapplyAt;
         private readonly Dictionary<ulong, byte[]> _theirProps = new Dictionary<ulong, byte[]>();
         public int PropsSwitched;
         private bool _comparedBody;
@@ -150,6 +150,19 @@ namespace TcgMultiplayer.Game
                     _nextPropsResendAt = Time.time + 10f;   // and for whoever just loaded in
                     _session.SendBodyProps(mask);
                 }
+            }
+
+            // Put everyone's body back to what its owner last said, every couple
+            // of seconds, whether or not a new message arrived. Twice now
+            // something else has quietly switched a prop back on — the asset's
+            // own defaults, then the detail-level swap — and a correction that
+            // only runs when a packet lands can't catch either. Walking a
+            // hundred-odd transforms a body costs nothing next to being wrong
+            // about what somebody is holding.
+            if (_session.State == SessionState.InLobby && Time.time >= _nextReapplyAt)
+            {
+                _nextReapplyAt = Time.time + 2f;
+                foreach (var kv in _theirProps) ApplyProps(kv.Key);
             }
 
             bool sending = _rig.Valid && (MirrorEnabled || _session.State == SessionState.InLobby);

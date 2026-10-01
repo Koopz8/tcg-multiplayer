@@ -208,12 +208,12 @@ namespace TcgMultiplayer.Game
             Collect(body, mine);
 
             Applied++;
-            int changed = 0;
+            int changed = 0, skippedHere = 0;
             StringBuilder said = _told < 20 ? new StringBuilder() : null;
             foreach (var kv in mine)
             {
                 byte flags;
-                if (!want.TryGetValue(kv.Key, out flags)) { Skipped++; continue; }
+                if (!want.TryGetValue(kv.Key, out flags)) { skippedHere++; continue; }
                 var t = kv.Value;
                 if (t == null) continue;
 
@@ -242,6 +242,10 @@ namespace TcgMultiplayer.Game
                 _told++;
                 Plugin.Log("Put right on their body: " + said);
             }
+            // The latest figure, not a running total: the correction now runs
+            // every couple of seconds, so a sum would just measure how long the
+            // session was.
+            Skipped = skippedHere;
             Switched += changed;
             return changed;
         }

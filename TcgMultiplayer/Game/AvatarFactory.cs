@@ -132,6 +132,7 @@ namespace TcgMultiplayer.Game
             UnityEngine.Object.DontDestroyOnLoad(clone);
 
             var stripped = Strip(clone);
+            int lods = FlattenLods(clone);
             var animator = clone.GetComponentInChildren<Animator>();
 
             if (animator != null && !_loggedAnimatorParams)
@@ -141,8 +142,58 @@ namespace TcgMultiplayer.Game
             }
 
             Plugin.Log("Built avatar for " + label + " (stripped " + stripped + " components"
+                       + (lods > 0 ? ", flattened " + lods + " detail levels" : "")
                        + (animator != null ? ", animator present)" : ", NO animator)"));
             return clone;
+        }
+
+        /// <summary>
+        /// A character carries a LODGroup: swap in a simpler mesh as it gets
+        /// further away. On a clone it is a second opinion about what should be
+        /// drawn, and it keeps changing its mind as you walk.
+        ///
+        /// That is the tickets coming back from a distance. We switch the pile
+        /// off because the owner says their hands are empty, and then the
+        /// LODGroup draws a different copy of the body that still has it. Walk
+        /// closer, the near version comes back, and the pile goes away again —
+        /// which is exactly what it looked like.
+        ///
+        /// So the levels are flattened: everything past the nearest one is
+        /// switched off and the group is removed, leaving one body with one
+        /// answer about what it's holding. These are a handful of players, not
+        /// a crowd, so the detail saved was never going to be missed.
+        /// </summary>
+        private static int FlattenLods(GameObject root)
+        {
+            int flattened = 0;
+            try
+            {
+                var groups = root.GetComponentsInChildren<LODGroup>(true);
+                foreach (var g in groups)
+                {
+                    if (g == null) continue;
+                    var levels = g.GetLODs();
+                    if (levels != null && levels.Length > 1)
+                    {
+                        // Anything the nearest level draws stays; the rest go,
+                        // unless the nearest level draws them too.
+                        var keep = new HashSet<Renderer>();
+                        if (levels[0].renderers != null)
+                            foreach (var r in levels[0].renderers) if (r != null) keep.Add(r);
+
+                        for (int i = 1; i < levels.Length; i++)
+                        {
+                            if (levels[i].renderers == null) continue;
+                            foreach (var r in levels[i].renderers)
+                                if (r != null && !keep.Contains(r)) r.enabled = false;
+                        }
+                    }
+                    try { UnityEngine.Object.DestroyImmediate(g); flattened++; }
+                    catch { }
+                }
+            }
+            catch (Exception ex) { Plugin.Warn("Couldn't flatten detail levels: " + ex.Message); }
+            return flattened;
         }
 
         internal static int Strip(GameObject root)

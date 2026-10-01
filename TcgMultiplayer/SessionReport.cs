@@ -224,8 +224,8 @@ namespace TcgMultiplayer
 
             if (Game.BodyProps.Applied > 0)
                 Line("Bodies tidied up", Game.BodyProps.Switched + " things switched over "
-                     + Game.BodyProps.Applied + " updates, "
-                     + Game.BodyProps.Skipped + " left alone because the other body had no such name");
+                     + Game.BodyProps.Applied + " passes; last pass left "
+                     + Game.BodyProps.Skipped + " parts alone, having no match on the other body");
             sb.AppendLine();
 
             Line("Steam stats", StatsLock.Status);
