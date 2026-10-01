@@ -644,7 +644,14 @@ namespace TcgMultiplayer.Game
             var buf = new byte[size];
             int o = 0;
             WriteU16(buf, ref o, (ushort)_bodies.Count);
-            WriteU16(buf, ref o, manifest ? FlagManifest : (sparse ? FlagSparse : (ushort)0));
+            // Manifests are sparse too — every packet names its bodies now —
+            // and the flag has to say so. It didn't: since the key dictionary
+            // went in, every keyframe was written with an index before each
+            // pose and read without one, so all 332 Treasure chests were put
+            // two bytes out of step every five seconds and flew apart until
+            // the next few packets put them back. The writer's size check
+            // couldn't see it; the reader's (below) now would.
+            WriteU16(buf, ref o, (ushort)((manifest ? FlagManifest : 0) | (sparse ? FlagSparse : 0)));
             if (manifest)
             {
                 buf[o++] = _keyGen;
@@ -1062,6 +1069,22 @@ namespace TcgMultiplayer.Game
                 applied++;
             }
 
+            // The reader's half of the size check. Every byte of a packet
+            // should be spoken for by the time the poses are read; if not, the
+            // two sides disagree about the format, and the bodies are being
+            // placed from the wrong bytes no matter what the counters say.
+            if (o != data.Length)
+            {
+                ReadMismatches++;
+                if (_readComplaints < 3)
+                {
+                    _readComplaints++;
+                    Plugin.Warn("Physics packet for " + m.Label + " was " + data.Length + " bytes and we read " + o
+                                + " - " + poses + " of " + count + " bodies" + (manifest ? ", manifest" : "")
+                                + (sparse ? ", sparse" : "") + ". The two sides disagree about the format.");
+                }
+            }
+
             BodiesApplied += applied;
             PacketsReceived++;
             RecvPosesLastPacket = poses;
@@ -1176,6 +1199,8 @@ namespace TcgMultiplayer.Game
                 : "No resting display on " + m.Label + " to hide (no CombinedMesh in use).");
         }
         public int RestingDisplaysHidden;
+        public int ReadMismatches;
+        private int _readComplaints;
 
         /// <summary>
         /// "Watching X: N bodies came in" counts what arrived. It can't tell
