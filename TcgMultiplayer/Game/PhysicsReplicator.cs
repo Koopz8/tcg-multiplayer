@@ -739,6 +739,7 @@ namespace TcgMultiplayer.Game
                 w = new Watched();
                 w.Label = m.Label;
                 _watched[m.Id] = w;
+                HideRestingDisplay(w, m);
             }
 
             // Our own walk, every packet: everything under the root goes
@@ -1124,6 +1125,57 @@ namespace TcgMultiplayer.Game
         }
 
         private float _nextSeenAt;
+
+        /// <summary>
+        /// A cabinet at rest doesn't draw its coins and chests one by one. The
+        /// OBJECTS controller saves where everything lies, destroys the real
+        /// objects, and draws the lot as ONE combined mesh (BATCHER_n, kept in
+        /// its "CombinedMesh" variable). A card going in spawns the real objects
+        /// back from the saved list and throws the combined mesh away.
+        ///
+        /// The watcher's round is muted, so neither half of that happens here:
+        /// the watcher's own resting layout stays drawn, frozen, and the
+        /// owner's pieces are drawn moving on top of it. That's "the bits fall
+        /// but some are frozen" — the frozen ones were never the owner's at
+        /// all. So the resting display goes out of sight while we watch, and
+        /// comes back exactly as it was on release.
+        /// </summary>
+        private void HideRestingDisplay(Watched w, Machine m)
+        {
+            var seen = new HashSet<GameObject>();
+            int renderers = 0;
+            string names = null;
+            try
+            {
+                foreach (var kv in m.Fsms)
+                {
+                    var fsm = kv.Value;
+                    if (fsm == null) continue;
+                    HutongGames.PlayMaker.FsmGameObject v = null;
+                    try { v = fsm.FsmVariables.FindFsmGameObject("CombinedMesh"); } catch { }
+                    var go = v != null ? v.Value : null;
+                    if (go == null || !seen.Add(go)) continue;
+                    // Never anything we place: a body under it would be hidden
+                    // along with it.
+                    if (go.GetComponentInChildren<Rigidbody>(true) != null) continue;
+                    if (!go.activeSelf) continue;
+                    renderers += go.GetComponentsInChildren<Renderer>(true).Length;
+                    names = names == null ? go.name : names + ", " + go.name;
+                    SetActiveRemembering(w, go, false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Warn("Couldn't look for " + m.Label + "'s resting display: " + ex.Message);
+                return;
+            }
+
+            RestingDisplaysHidden += seen.Count > 0 && names != null ? 1 : 0;
+            Plugin.Log(names != null
+                ? "Hid " + m.Label + "'s resting display (" + names + ", " + renderers + " renderers) - it's this side's last layout, frozen, and the owner's pieces are drawn instead."
+                : "No resting display on " + m.Label + " to hide (no CombinedMesh in use).");
+        }
+        public int RestingDisplaysHidden;
 
         /// <summary>
         /// "Watching X: N bodies came in" counts what arrived. It can't tell
