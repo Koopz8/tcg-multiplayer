@@ -1,74 +1,74 @@
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace TcgMultiplayer.Game
 {
     /// <summary>
-    /// Which parts of a player's body are switched on, as one bit each.
+    /// Which things on a player's body are showing, mirrored to everyone else.
     ///
-    /// Both characters turned up holding tickets neither of them had. The
-    /// reason is that the pile in a player's hand is not a loose object that
-    /// gets picked up — the floor pile is DESTROYED on pickup, and what appears
-    /// in the hand is a prop that was always parented to the character and
-    /// simply gets switched on. A remote body is a clone of that character
-    /// mesh, so it was cloned with whatever props happened to be hanging off it,
-    /// visible, forever.
+    /// The first attempt sent one bit per object in walk order, on the grounds
+    /// that a clone of a mesh has the same hierarchy as the mesh. It does not,
+    /// because the clone is built from the loaded ASSET and the mask is packed
+    /// from the LIVE mesh in the owner's scene. The measurement that should
+    /// have come first says how wrong that was:
     ///
-    /// The fix needs no knowledge of which objects those are. The watcher's
-    /// body is a clone of the same mesh, so it has the same hierarchy in the
-    /// same order; walk both the same way and the nth object here is the nth
-    /// object there. So the owner sends a bit per object and the watcher
-    /// applies it. No names, no list to keep up to date when the game adds a
-    /// prize, and it covers everything a character can be shown holding rather
-    /// than only the ones we thought to look for.
+    ///   Body walk: 145 objects under our own LARRY Mesh, 130 under the clone
+    ///   of the guest's — they stop matching at 2 ("L_WatchMenu LSTNR" here,
+    ///   "Pigtails_1" there).
     ///
-    /// Bones are always on and cost a bit each, which is the price of not
-    /// having to know anything: a whole body is about thirty bytes, sent only
-    /// when something changes.
+    /// Index two. Everything after it was switching whatever happened to sit at
+    /// that number, which on a character is mostly bones, which is why eyes
+    /// ended up sitting in the grass while the body walked off.
     ///
-    /// WHICH WAS WRONG, and switched off here until it can be done by name.
-    /// "Walk both the same way and the nth object here is the nth object there"
-    /// was the entire premise and it only holds when both sides are looking at
-    /// the same hierarchy. They are not. The owner packs from the LIVE mesh in
-    /// their scene; the watcher's body is a clone of a loaded ASSET, because
-    /// two people usually pick different characters —
+    /// So this goes by NAME, and only for names that exist exactly once on both
+    /// bodies. A name the other side doesn't have is never touched, which is
+    /// what keeps Mandy's pigtails on Mandy and Larry's sunglasses on Larry; a
+    /// name that appears twice is skipped rather than guessed at. Nothing can
+    /// be switched that both sides didn't already agree exists.
     ///
-    ///   Local guest (window 2) is playing as MANDY Mesh.
-    ///   Character "MANDY Mesh": cloning MANDY Mesh (loaded asset).
-    ///
-    /// A live mesh picks up children at runtime that the asset has never had,
-    /// and one extra child at any level shifts every bit after it. From there
-    /// the mask is switching whatever happens to be at that index, and most of
-    /// what is under a character is bones. Switch a bone's object off and it
-    /// stops animating, its children keep whatever transform they had, and the
-    /// skinned mesh draws against a frozen bone: eyes that float away from the
-    /// head and tilt with every step.
-    ///
-    /// "29 parts switched over 26 updates" looked like one prop per update. It
-    /// was 29 wrong nodes. A count being small is not the same as it being
-    /// right, and I should have sent something that could prove the two bodies
-    /// matched instead of assuming it.
+    /// The same measurement named the things in question. A character carries a
+    /// drawer of them — WOODBAT, CHEESYPOOFS, LEMONADE, JERRYS JERKY, LASER TAG
+    /// PHASER, TV Remote, a flashlight — nearly all switched off at any moment,
+    /// and the asset ships with some of them switched ON. That is the phantom
+    /// tickets: not something the player picked up, just a prop that was on by
+    /// default in the asset and switched off at runtime in the real game, so
+    /// the clone kept showing it. Telling the clone what the owner's copy
+    /// actually has switched on settles it, and settles every other item in
+    /// that drawer at the same time without naming any of them here.
     /// </summary>
     internal static class BodyProps
     {
-        /// <summary>Beyond this a mesh is not a character and we leave it alone.</summary>
-        public const int MaxNodes = 2048;
+        public const int MaxNodes = 4096;
+        public const int MaxNames = 250;
 
-        private static readonly List<Transform> Scratch = new List<Transform>(256);
-
-        /// <summary>
-        /// How many parts of other people's bodies we've switched this session.
-        /// A handful per body is right — the props. Thousands would mean the two
-        /// walks have drifted apart and we're switching bones on and off.
-        /// </summary>
-        public static int Switched;
-        public static int Applied;
+        public static int Switched, Applied, Skipped;
 
         /// <summary>
-        /// Depth-first, children in order, the root itself excluded. Both ends
-        /// must walk identically — this is the only copy of the walk, which is
-        /// the point.
+        /// Every object with something to draw, by name — minus any name that
+        /// turns up more than once, because then it doesn't identify anything.
+        /// Both ends build this the same way from their own body.
         /// </summary>
+        private static void Collect(Transform root, Dictionary<string, Transform> into)
+        {
+            into.Clear();
+            if (root == null) return;
+            var stack = new List<Transform>(256);
+            Walk(root, stack);
+
+            var seenTwice = new HashSet<string>();
+            for (int i = 0; i < stack.Count; i++)
+            {
+                var t = stack[i];
+                if (t == null || t.GetComponent<Renderer>() == null) continue;
+                var n = t.name;
+                if (string.IsNullOrEmpty(n) || n.Length > 200) continue;
+                if (seenTwice.Contains(n)) continue;
+                if (into.ContainsKey(n)) { into.Remove(n); seenTwice.Add(n); continue; }
+                into[n] = t;
+            }
+        }
+
         private static void Walk(Transform t, List<Transform> into)
         {
             for (int i = 0; i < t.childCount; i++)
@@ -80,19 +80,76 @@ namespace TcgMultiplayer.Game
             }
         }
 
-        /// <summary>
-        /// Off until the mirroring is done by name with a check that the two
-        /// bodies agree. Nothing is sent and nothing is applied while this is
-        /// false, so a body is left exactly as its source had it.
-        /// </summary>
-        public const bool Mirror = false;
+        public static byte[] Pack(Transform mesh)
+        {
+            if (mesh == null) return null;
+            var found = new Dictionary<string, Transform>(64);
+            Collect(mesh, found);
+            if (found.Count == 0) return null;
+
+            var ms = new System.IO.MemoryStream(1024);
+            var w = new System.IO.BinaryWriter(ms, Encoding.UTF8);
+            int n = found.Count < MaxNames ? found.Count : MaxNames;
+            w.Write((byte)n);
+            int wrote = 0;
+            foreach (var kv in found)
+            {
+                if (wrote++ >= n) break;
+                var name = Encoding.UTF8.GetBytes(kv.Key);
+                if (name.Length > 200) { w.Write((byte)0); continue; }
+                w.Write((byte)name.Length);
+                w.Write(name);
+                w.Write((byte)(kv.Value != null && kv.Value.gameObject.activeSelf ? 1 : 0));
+            }
+            return ms.ToArray();
+        }
 
         /// <summary>
-        /// Said once, the first time a body is built: what the live mesh here has
-        /// that the clone does not, and what each side thinks is switched on.
-        /// This is the measurement that should have come before the fix — it
-        /// names the objects involved instead of leaving me to guess which of
-        /// them is a ticket pile.
+        /// Switches this body's things to match what the owner says theirs are
+        /// doing. A name we don't have, or have twice, is left alone — so the
+        /// worst this can do is nothing.
+        /// </summary>
+        public static int Apply(Transform body, byte[] data)
+        {
+            if (body == null || data == null || data.Length < 1) return 0;
+
+            var want = new Dictionary<string, bool>(64);
+            try
+            {
+                var r = new System.IO.BinaryReader(new System.IO.MemoryStream(data), Encoding.UTF8);
+                int n = r.ReadByte();
+                for (int i = 0; i < n; i++)
+                {
+                    int len = r.ReadByte();
+                    if (len == 0) continue;
+                    var name = Encoding.UTF8.GetString(r.ReadBytes(len));
+                    want[name] = r.ReadByte() != 0;
+                }
+            }
+            catch { return 0; }
+
+            var mine = new Dictionary<string, Transform>(64);
+            Collect(body, mine);
+
+            Applied++;
+            int changed = 0;
+            foreach (var kv in mine)
+            {
+                bool on;
+                if (!want.TryGetValue(kv.Key, out on)) { Skipped++; continue; }
+                var t = kv.Value;
+                if (t == null || t.gameObject.activeSelf == on) continue;
+                t.gameObject.SetActive(on);
+                changed++;
+            }
+            Switched += changed;
+            return changed;
+        }
+
+        /// <summary>
+        /// Said once per session, the first time a body is built. This is what
+        /// turned the bitmask from a plausible idea into a measured mistake, so
+        /// it stays in.
         /// </summary>
         public static void Compare(Transform live, Transform clone)
         {
@@ -106,11 +163,18 @@ namespace TcgMultiplayer.Game
                 if (a[i] == null || b[i] == null || a[i].name != b[i].name) { diverge = i; break; }
 
             Plugin.Log("Body walk: " + a.Count + " objects under our own " + live.name
-                       + ", " + b.Count + " under the clone of " + clone.name
+                       + ", " + b.Count + " under the clone"
                        + (diverge < 0
-                          ? (a.Count == b.Count ? " — same names all the way down." : " — same as far as the shorter one goes.")
+                          ? " — same names as far as the shorter one goes."
                           : " — they stop matching at " + diverge + " (\"" + (a[diverge] != null ? a[diverge].name : "?")
                             + "\" here, \"" + (b[diverge] != null ? b[diverge].name : "?") + "\" there)."));
+
+            var mineByName = new Dictionary<string, Transform>(64); Collect(live, mineByName);
+            var theirsByName = new Dictionary<string, Transform>(64); Collect(clone, theirsByName);
+            int shared = 0;
+            foreach (var kv in mineByName) if (theirsByName.ContainsKey(kv.Key)) shared++;
+            Plugin.Log("Named things we can both place: " + shared + " of " + mineByName.Count
+                       + " here and " + theirsByName.Count + " there. Only those get mirrored.");
 
             Describe("ours", a);
             Describe("theirs", b);
@@ -118,62 +182,21 @@ namespace TcgMultiplayer.Game
 
         private static void Describe(string side, List<Transform> all)
         {
-            var sb = new System.Text.StringBuilder();
+            var sb = new StringBuilder();
             int said = 0;
-            for (int i = 0; i < all.Count && said < 30; i++)
+            for (int i = 0; i < all.Count && said < 80; i++)
             {
                 var t = all[i];
                 if (t == null) continue;
                 var r = t.GetComponent<Renderer>();
                 if (r == null) continue;
                 said++;
-                sb.Append(i).Append(':').Append(t.name)
-                  .Append(t.gameObject.activeSelf ? "" : " (object off)")
+                sb.Append(t.name)
+                  .Append(t.gameObject.activeSelf ? "" : " (off)")
                   .Append(r.enabled ? "" : " (renderer off)")
                   .Append("  ");
             }
             Plugin.Log("Things you can see, " + side + ": " + (said == 0 ? "none" : sb.ToString()));
-        }
-
-        public static byte[] Pack(Transform mesh)
-        {
-            if (mesh == null) return null;
-            Scratch.Clear();
-            Walk(mesh, Scratch);
-            if (Scratch.Count == 0) return null;
-
-            var mask = new byte[(Scratch.Count + 7) / 8];
-            for (int i = 0; i < Scratch.Count; i++)
-                if (Scratch[i] != null && Scratch[i].gameObject.activeSelf)
-                    mask[i >> 3] |= (byte)(1 << (i & 7));
-            return mask;
-        }
-
-        /// <summary>
-        /// Applies a mask to a body. Returns how many objects it switched, which
-        /// is the number worth watching: it should be a handful on the first
-        /// mask and near zero afterwards.
-        /// </summary>
-        public static int Apply(Transform body, byte[] mask)
-        {
-            if (body == null || mask == null) return 0;
-            Scratch.Clear();
-            Walk(body, Scratch);
-
-            Applied++;
-            int changed = 0;
-            int bits = mask.Length * 8;
-            for (int i = 0; i < Scratch.Count && i < bits; i++)
-            {
-                var t = Scratch[i];
-                if (t == null) continue;
-                bool on = (mask[i >> 3] & (1 << (i & 7))) != 0;
-                if (t.gameObject.activeSelf == on) continue;
-                t.gameObject.SetActive(on);
-                changed++;
-            }
-            Switched += changed;
-            return changed;
         }
     }
 }

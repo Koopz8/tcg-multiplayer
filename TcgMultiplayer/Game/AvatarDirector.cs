@@ -109,7 +109,6 @@ namespace TcgMultiplayer.Game
         {
             byte[] mask;
             RemoteAvatar a;
-            if (!BodyProps.Mirror) return;
             if (!_theirProps.TryGetValue(peer, out mask)) return;
             if (!_avatars.TryGetValue(peer, out a) || !a.Alive) return;
             PropsSwitched += BodyProps.Apply(a.Go.transform, mask);
@@ -141,7 +140,7 @@ namespace TcgMultiplayer.Game
             // the hand is a prop that was always part of the character, so this
             // is what tells everyone else whether it is showing — and, at the
             // start, that it is NOT, which is the bug it was written for.
-            if (BodyProps.Mirror && _session.State == SessionState.InLobby && _rig.Valid && Time.time >= _nextPropsAt)
+            if (_session.State == SessionState.InLobby && _rig.Valid && Time.time >= _nextPropsAt)
             {
                 _nextPropsAt = Time.time + 0.25f;
                 var mask = BodyProps.Pack(_rig.Mesh);
@@ -329,6 +328,7 @@ namespace TcgMultiplayer.Game
             _theirProps.Clear();
             BodyProps.Switched = 0;
             BodyProps.Applied = 0;
+            BodyProps.Skipped = 0;
             _comparedBody = false;
         }
 

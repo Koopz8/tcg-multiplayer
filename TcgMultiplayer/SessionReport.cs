@@ -223,10 +223,9 @@ namespace TcgMultiplayer
             }
 
             if (Game.BodyProps.Applied > 0)
-                Line("Bodies tidied up", Game.BodyProps.Switched + " parts switched over "
-                     + Game.BodyProps.Applied + " updates"
-                     + (Game.BodyProps.Switched > Game.BodyProps.Applied * 40
-                        ? "   <-- far too many; the two bodies may not match" : ""));
+                Line("Bodies tidied up", Game.BodyProps.Switched + " things switched over "
+                     + Game.BodyProps.Applied + " updates, "
+                     + Game.BodyProps.Skipped + " left alone because the other body had no such name");
             sb.AppendLine();
 
             Line("Steam stats", StatsLock.Status);
