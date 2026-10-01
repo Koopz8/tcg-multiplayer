@@ -222,6 +222,13 @@ namespace TcgMultiplayer
                 sb.AppendLine();
             }
 
+            if (Game.BodyProps.Applied > 0)
+                Line("Bodies tidied up", Game.BodyProps.Switched + " parts switched over "
+                     + Game.BodyProps.Applied + " updates"
+                     + (Game.BodyProps.Switched > Game.BodyProps.Applied * 40
+                        ? "   <-- far too many; the two bodies may not match" : ""));
+            sb.AppendLine();
+
             Line("Steam stats", StatsLock.Status);
             sb.AppendLine();
 

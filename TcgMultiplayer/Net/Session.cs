@@ -68,6 +68,7 @@ namespace TcgMultiplayer.Net
         public Action<CSteamID, byte[]> OnLooseItem;
         /// <summary>A peer telling us which character they're playing, after the handshake.</summary>
         public Action<CSteamID, string> OnCharacter;
+        public Action<CSteamID, byte[]> OnBodyProps;
         /// <summary>Where a vehicle someone else is driving has got to.</summary>
         public Action<CSteamID, uint, ObjectPose> OnObjectState;
         /// <summary>Host only: someone wants a seat in something, or wants out of it.</summary>
@@ -393,6 +394,24 @@ namespace TcgMultiplayer.Net
                 w.Str(character ?? "");
                 var bytes = w.ToArray();
                 CountSent(Op.Character, bytes.Length, Peers.Count);
+                foreach (var p in Peers)
+                    _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
+            }
+        }
+
+        /// <summary>
+        /// A bit per object under my character mesh: switched on, or off. See
+        /// BodyProps in AvatarDirector for why this is a blind bitmask rather
+        /// than a list of things by name.
+        /// </summary>
+        public void SendBodyProps(byte[] mask)
+        {
+            if (State != SessionState.InLobby || Peers.Count == 0 || mask == null) return;
+            using (var w = new PacketWriter(Op.BodyProps))
+            {
+                w.Bytes(mask);
+                var bytes = w.ToArray();
+                CountSent(Op.BodyProps, bytes.Length, Peers.Count);
                 foreach (var p in Peers)
                     _net.Send(p.Id, bytes, SteamTransport.ChannelControl, true);
             }
@@ -1033,6 +1052,13 @@ namespace TcgMultiplayer.Net
                                 Log(peer.Name + " is playing as " + who + ".");
                                 if (OnCharacter != null) OnCharacter(peer.Id, who);
                             }
+                            break;
+                        }
+
+                        case Op.BodyProps:
+                        {
+                            var mask = pr.Bytes();
+                            if (OnBodyProps != null) OnBodyProps(peer.Id, mask);
                             break;
                         }
 

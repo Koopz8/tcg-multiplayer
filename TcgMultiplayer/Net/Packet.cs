@@ -26,6 +26,7 @@ namespace TcgMultiplayer.Net
         MachineScreen = 18, // owner -> spectators: the cabinet's text, as strings
         LooseItem = 19,    // anyone -> everyone: a ticket pile or prize on the floor near me
         Character = 20,    // anyone -> everyone: which character I'm playing as, once I know
+        BodyProps = 21,    // anyone -> everyone: which parts of my body are switched on
     }
 
     /// <summary>

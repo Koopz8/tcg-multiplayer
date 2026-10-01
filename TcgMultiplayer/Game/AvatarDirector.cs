@@ -25,6 +25,10 @@ namespace TcgMultiplayer.Game
         private readonly Dictionary<ulong, RemoteAvatar> _avatars = new Dictionary<ulong, RemoteAvatar>();
         private readonly List<ulong> _scratch = new List<ulong>();
         private string _announcedCharacter = "";
+        private byte[] _sentProps;
+        private float _nextPropsAt, _nextPropsResendAt;
+        private readonly Dictionary<ulong, byte[]> _theirProps = new Dictionary<ulong, byte[]>();
+        public int PropsSwitched;
 
         // Mirror mode plumbing
         private readonly Queue<KeyValuePair<float, byte[]>> _mirrorQueue = new Queue<KeyValuePair<float, byte[]>>();
@@ -83,6 +87,30 @@ namespace TcgMultiplayer.Game
                 Plugin.Log("Rebuilding their body as " + who + ".");
                 Despawn(id.m_SteamID);
             };
+
+            _session.OnBodyProps += (id, mask) =>
+            {
+                if (mask == null) return;
+                // Kept whether or not their body exists yet: a mask that arrives
+                // first is applied the moment the body is built, so nobody is
+                // ever briefly holding somebody else's tickets.
+                _theirProps[id.m_SteamID] = mask;
+                ApplyProps(id.m_SteamID);
+            };
+        }
+
+        /// <summary>
+        /// Switches a body's parts to match the last mask its owner sent. Called
+        /// when a mask arrives and when a body is built, because either can be
+        /// second.
+        /// </summary>
+        private void ApplyProps(ulong peer)
+        {
+            byte[] mask;
+            RemoteAvatar a;
+            if (!_theirProps.TryGetValue(peer, out mask)) return;
+            if (!_avatars.TryGetValue(peer, out a) || !a.Alive) return;
+            PropsSwitched += BodyProps.Apply(a.Go.transform, mask);
         }
 
         // ----------------------------------------------------------------- pump
@@ -105,6 +133,22 @@ namespace TcgMultiplayer.Game
                 _announcedCharacter = PlayerRig.LocalCharacter;
                 _session.SendCharacter(_announcedCharacter);
                 Plugin.Log("Told everyone we're playing as " + _announcedCharacter + ".");
+            }
+
+            // What's switched on under our own mesh. A prize or a ticket pile in
+            // the hand is a prop that was always part of the character, so this
+            // is what tells everyone else whether it is showing — and, at the
+            // start, that it is NOT, which is the bug it was written for.
+            if (_session.State == SessionState.InLobby && _rig.Valid && Time.time >= _nextPropsAt)
+            {
+                _nextPropsAt = Time.time + 0.25f;
+                var mask = BodyProps.Pack(_rig.Mesh);
+                if (mask != null && (!SameMask(mask, _sentProps) || Time.time >= _nextPropsResendAt))
+                {
+                    _sentProps = mask;
+                    _nextPropsResendAt = Time.time + 2f;    // and for whoever just loaded in
+                    _session.SendBodyProps(mask);
+                }
             }
 
             bool sending = _rig.Valid && (MirrorEnabled || _session.State == SessionState.InLobby);
@@ -236,6 +280,9 @@ namespace TcgMultiplayer.Game
                 av = new RemoteAvatar();
                 if (!av.Spawn(source, label)) return;
                 _avatars[key] = av;
+                // A fresh clone carries whatever props were hanging off the
+                // character, switched on. Put them right before it is drawn.
+                ApplyProps(key);
             }
             av.Label = label;
             av.Push(st);
@@ -255,6 +302,14 @@ namespace TcgMultiplayer.Game
             _avatars.Remove(key);
         }
 
+        private static bool SameMask(byte[] a, byte[] b)
+        {
+            if (a == null || b == null) return false;
+            if (a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+            return true;
+        }
+
         public void DespawnAll()
         {
             _scratch.Clear();
@@ -263,6 +318,10 @@ namespace TcgMultiplayer.Game
             _mirrorQueue.Clear();
             // Next session announces again from scratch.
             _announcedCharacter = "";
+            _sentProps = null;
+            _theirProps.Clear();
+            BodyProps.Switched = 0;
+            BodyProps.Applied = 0;
         }
 
         /// <summary>
