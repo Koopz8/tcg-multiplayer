@@ -32,7 +32,7 @@ namespace TcgMultiplayer.Game
         private const float ResendEvery = 10f;
         private const float NearRadius = 15f;
 
-        public const byte KindSpawn = 1, KindPose = 2, KindGone = 3;
+        public const byte KindSpawn = 1, KindPose = 2, KindGone = 3, KindHeld = 4;
 
         // ---------------------------------------------------------- owner side
         private sealed class Mine
@@ -44,6 +44,8 @@ namespace TcgMultiplayer.Game
             public Quaternion LastRot;
             public float NextPoseAt;
             public bool Hidden;          // under PLAYER: announced gone, still tracked
+            public string HeldBone;      // where under the mesh, while it's being carried
+            public float NextHeldAt;
         }
         private readonly HashSet<int> _known = new HashSet<int>();
         private readonly List<Mine> _mine = new List<Mine>();
@@ -57,15 +59,39 @@ namespace TcgMultiplayer.Game
             public GameObject Go;
             public Vector3 Pos;
             public Quaternion Rot;
+            /// <summary>Parented to a bone on their body; the animation carries it, we don't.</summary>
+            public bool Held;
         }
         private readonly Dictionary<ulong, Dictionary<uint, Theirs>> _theirs = new Dictionary<ulong, Dictionary<uint, Theirs>>();
         private readonly Dictionary<string, GameObject> _prefabs = new Dictionary<string, GameObject>();
         private readonly HashSet<string> _prefabMisses = new HashSet<string>();
+        private readonly HashSet<string> _boneMisses = new HashSet<string>();
+        private readonly HashSet<string> _carryPathMisses = new HashSet<string>();
+
+        private static Transform FindDeep(Transform root, string name)
+        {
+            if (root == null) return null;
+            if (root.name == name) return root;
+            for (int i = 0; i < root.childCount; i++)
+            {
+                var hit = FindDeep(root.GetChild(i), name);
+                if (hit != null) return hit;
+            }
+            return null;
+        }
 
         public int Tracked, Shown, Spawned, Gone, PrefabMisses;
 
         /// <summary>Called with (reliable, payload) when there is something to send.</summary>
         public Action<bool, byte[]> Send;
+
+        /// <summary>
+        /// A peer's body, so a thing they are carrying can be hung off the right
+        /// bone of it. Null while they have no body yet — the item waits on the
+        /// floor version until the next re-announce.
+        /// </summary>
+        public Func<ulong, Transform> PeerMesh;
+        public int Carried, CarryMisses;
 
         public void Reset()
         {
@@ -108,14 +134,55 @@ namespace TcgMultiplayer.Game
                 bool underPlayer = rig.Root != null && t.IsChildOf(rig.Root);
                 if (underPlayer != it.Hidden)
                 {
-                    // Picked up but kept (a prize in the hand) — it leaves the
-                    // floor for everyone. Put down again — it comes back.
+                    // Picked up but kept. It used to be announced as gone, which
+                    // is why a friend holding a hundred tickets appeared to be
+                    // holding nothing — they left the floor for everyone and
+                    // never came back until they were dropped. Now where it sits
+                    // on the body goes out instead.
                     it.Hidden = underPlayer;
-                    Emit(true, underPlayer ? Gone1(it.Id) : Spawn1(it));
+                    it.HeldBone = underPlayer ? BoneUnderMesh(t, rig) : null;
+                    if (underPlayer && it.HeldBone != null) Emit(true, Held1(it, rig));
+                    else
+                    {
+                        if (underPlayer && _carryPathMisses.Add(it.Prefab ?? "?"))
+                        {
+                            // Worth knowing rather than guessing: if picked-up
+                            // things are not parented under the character mesh,
+                            // this is the line that says where they went instead.
+                            string where;
+                            try { where = NetId.Path(t); } catch { where = "?"; }
+                            Plugin.Log("Picked up " + it.Prefab + " but it isn't under the character mesh ("
+                                       + where + "), so it just disappears for everyone else.");
+                        }
+                        Emit(true, underPlayer ? Gone1(it.Id) : Spawn1(it));
+                    }
                     if (!underPlayer) { it.LastPos = t.position; it.LastRot = t.rotation; }
                     continue;
                 }
-                if (it.Hidden) continue;
+                if (it.Hidden)
+                {
+                    // Held items are re-announced on the resend, and otherwise
+                    // only when the offset changes — swapping a prize between
+                    // hands, or the game re-seating it. The bone animation is
+                    // what carries it on the watcher's side, so there is nothing
+                    // to stream frame by frame.
+                    if (it.HeldBone == null) continue;
+                    var bone = BoneUnderMesh(t, rig);
+                    if (bone != it.HeldBone)
+                    {
+                        it.HeldBone = bone;
+                        if (bone == null) { Emit(true, Gone1(it.Id)); continue; }
+                        Emit(true, Held1(it, rig));
+                        it.NextHeldAt = now + 1f;
+                        continue;
+                    }
+                    if (resend || now >= it.NextHeldAt)
+                    {
+                        it.NextHeldAt = now + 2f;
+                        Emit(true, Held1(it, rig));
+                    }
+                    continue;
+                }
 
                 if (resend) Emit(true, Spawn1(it));
 
@@ -209,6 +276,50 @@ namespace TcgMultiplayer.Game
             return ms.ToArray();
         }
 
+        /// <summary>
+        /// Where the item sits under the player's mesh, as a path of bone names:
+        /// "Reference/Hips/Spine/Chest/RightShoulder/RightArm/RightForeArm/RightHand".
+        /// The mesh itself is left out of the path because the watcher's copy of
+        /// this player may be a different character, and its own mesh is the root
+        /// the path is resolved against.
+        /// </summary>
+        private static string BoneUnderMesh(Transform t, PlayerRig rig)
+        {
+            if (rig == null || rig.Mesh == null || t == null) return null;
+            var parent = t.parent;
+            if (parent == null || !parent.IsChildOf(rig.Mesh)) return null;
+            if (parent == rig.Mesh) return "";
+            var sb = new StringBuilder(96);
+            BuildPath(parent, rig.Mesh, sb);
+            return sb.ToString();
+        }
+
+        private static void BuildPath(Transform t, Transform stopAt, StringBuilder sb)
+        {
+            if (t == null || t == stopAt) return;
+            BuildPath(t.parent, stopAt, sb);
+            if (sb.Length > 0) sb.Append('/');
+            sb.Append(t.name);
+        }
+
+        private static byte[] Held1(Mine it, PlayerRig rig)
+        {
+            var ms = new MemoryStream(96);
+            var w = new BinaryWriter(ms, Encoding.UTF8);
+            w.Write(KindHeld); w.Write(it.Id);
+            var name = Encoding.UTF8.GetBytes(it.Prefab ?? "");
+            w.Write((ushort)name.Length); w.Write(name);
+            var bone = Encoding.UTF8.GetBytes(it.HeldBone ?? "");
+            w.Write((ushort)bone.Length); w.Write(bone);
+            var t = it.Body.transform;
+            // The offset within the bone, so a ticket pile sits in the hand the
+            // same way it does on the owner's screen.
+            w.Write(t.localPosition.x); w.Write(t.localPosition.y); w.Write(t.localPosition.z);
+            w.Write(t.localRotation.x); w.Write(t.localRotation.y);
+            w.Write(t.localRotation.z); w.Write(t.localRotation.w);
+            return ms.ToArray();
+        }
+
         private static byte[] Gone1(uint id)
         {
             var ms = new MemoryStream(8);
@@ -253,6 +364,13 @@ namespace TcgMultiplayer.Game
                     if (set.TryGetValue(id, out th) && th.Go != null)
                     {
                         // A resend for anyone who joined late; we already have it.
+                        // Or a prize they were carrying and have put back down,
+                        // in which case it has to come off the hand first.
+                        if (th.Held)
+                        {
+                            th.Held = false;
+                            try { th.Go.transform.SetParent(null, true); } catch { }
+                        }
                         th.Pos = pos; th.Rot = rot;
                         return;
                     }
@@ -271,6 +389,54 @@ namespace TcgMultiplayer.Game
                     Theirs th;
                     if (!set.TryGetValue(id, out th) || th.Go == null) return;   // the spawn is on its way
                     th.Pos = pos; th.Rot = rot;
+                    break;
+                }
+                case KindHeld:
+                {
+                    int pn = r.ReadUInt16();
+                    var prefab = Encoding.UTF8.GetString(r.ReadBytes(pn));
+                    int bn = r.ReadUInt16();
+                    var bonePath = Encoding.UTF8.GetString(r.ReadBytes(bn));
+                    var lp = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                    var lr = new Quaternion(r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+
+                    var mesh = PeerMesh != null ? PeerMesh(from) : null;
+                    if (mesh == null) { CarryMisses++; return; }   // no body yet; a re-announce follows
+
+                    Transform bone = mesh;
+                    if (bonePath.Length > 0)
+                    {
+                        bone = mesh.Find(bonePath);
+                        if (bone == null)
+                        {
+                            // Characters may not share a skeleton. Better in the
+                            // wrong hand than invisible, so fall back to the last
+                            // name in the path, then to the body itself.
+                            int cut = bonePath.LastIndexOf('/');
+                            var leaf = cut >= 0 ? bonePath.Substring(cut + 1) : bonePath;
+                            bone = FindDeep(mesh, leaf) ?? mesh;
+                            if (_boneMisses.Add(bonePath))
+                                Plugin.Log("Couldn't find \"" + bonePath + "\" on a peer's body for " + prefab
+                                           + "; hanging it off " + bone.name + " instead.");
+                        }
+                    }
+
+                    Theirs th;
+                    if (!set.TryGetValue(id, out th) || th.Go == null)
+                    {
+                        var made = Build(prefab, id, from);
+                        if (made == null) return;
+                        th = new Theirs { Go = made };
+                        set[id] = th;
+                        Shown++;
+                    }
+
+                    if (!th.Held) Carried++;
+                    th.Held = true;
+                    var tr = th.Go.transform;
+                    tr.SetParent(bone, false);
+                    tr.localPosition = lp;
+                    tr.localRotation = lr;
                     break;
                 }
                 case KindGone:
@@ -294,6 +460,7 @@ namespace TcgMultiplayer.Game
                 foreach (var it in kv.Value.Values)
                 {
                     if (it.Go == null) continue;
+                    if (it.Held) continue;   // the bone it hangs off is doing the work
                     var t = it.Go.transform;
                     t.position = Vector3.Lerp(t.position, it.Pos, 0.35f);
                     t.rotation = Quaternion.Slerp(t.rotation, it.Rot, 0.35f);

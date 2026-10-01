@@ -189,6 +189,13 @@ namespace TcgMultiplayer
                     sb.AppendLine();
                 }
 
+                if (m.Items.Carried > 0 || m.Items.CarryMisses > 0 || m.Items.Shown > 0)
+                    Line("   loose items", m.Items.Shown + " of theirs shown, "
+                         + m.Items.Carried + " of those were in their hands"
+                         + (m.Items.CarryMisses > 0
+                            ? ", " + m.Items.CarryMisses + " arrived before we had a body to hang them on" : ""));
+                sb.AppendLine();
+
                 sb.AppendLine("Your money");
                 if (!m.Wallet.Available) sb.AppendLine("   economy globals were never readable");
                 else

@@ -38,6 +38,19 @@ namespace TcgMultiplayer.Game
         public float SendRate = 15f;
 
         public int AvatarCount { get { return _avatars.Count; } }
+
+        /// <summary>
+        /// A peer's body, which is a clone of whichever character mesh they
+        /// picked — so its own transform is the root that a bone path from their
+        /// machine resolves against. Used to hang what they are carrying off
+        /// their hand.
+        /// </summary>
+        public Transform MeshOf(ulong peer)
+        {
+            RemoteAvatar a;
+            if (_avatars.TryGetValue(peer, out a) && a.Alive) return a.Go.transform;
+            return null;
+        }
         public bool RigReady { get { return _rig.Valid; } }
 
         /// <summary>The local player rig. Seating needs to move it; nothing else writes to it.</summary>

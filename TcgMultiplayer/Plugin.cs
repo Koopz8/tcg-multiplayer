@@ -14,7 +14,7 @@ namespace TcgMultiplayer
 {
     public class Plugin : MelonMod
     {
-        public const string Version = "0.14.3";
+        public const string Version = "0.15.0";
 
         /// <summary>
         /// When this DLL was written, read off the file itself. Shown in the
@@ -230,6 +230,9 @@ namespace TcgMultiplayer
             _machines = new MachineDirector(_session);
             _machines.Wallet.Configure(pWalletPrefixes.Value);
             _machines.RigSource = () => _avatars.Rig;
+            // Things people carry hang off the hand of their body, so the item
+            // side has to be able to ask the avatar side for it.
+            _machines.Items.PeerMesh = id => _avatars.MeshOf(id);
 
             // The two halves find each other through delegates rather than
             // references: a passenger's position is sent in their vehicle's
