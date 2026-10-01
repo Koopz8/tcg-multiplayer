@@ -99,6 +99,7 @@ namespace TcgMultiplayer.Game
             _session.OnMachineEvent += OnMirroredEvent;
             Physics.Report = Watch;
             Screen.Report = Watch;
+            Screen.Movers = Unsent;
             _session.OnMachinePhysics += OnPhysics;
             _session.OnMachineScreen += OnScreen;
             _session.OnLooseItem += (from, payload) => Items.Receive(from.m_SteamID, payload);
@@ -180,6 +181,11 @@ namespace TcgMultiplayer.Game
                     m.LocallyOccupied = true;
                     live._awaySince = -1f;
                     live._watchStates.Add(m.Id);
+                    // A card going in is the opposite of leaving. Without this
+                    // a hand-back asked for on the LAST machine (Cuckoo's card
+                    // coming out) carried over to the next one and gave Big
+                    // Bass back half a second after the card went in.
+                    live._leavingSince = -1f;
                     live.RequestClaim(m);
                 }
 
@@ -373,7 +379,6 @@ namespace TcgMultiplayer.Game
                 {
                     var screen = Screen.Poll(mine);
                     if (screen != null) _session.SendMachineScreen(mine.Id, screen);
-                    if (Screen.MineMachine == mine.Id) Unsent.Tick(mine, Screen.SentByScreen);
                 }
             }
 
@@ -558,7 +563,7 @@ namespace TcgMultiplayer.Game
             if (m.Id == MyMachine && !m.OwnedByMe) { MyMachine = 0; Unsent.End(); }
             if (m.OwnedByMe)
             {
-                if (MyMachine != m.Id) _lastOwnMotionAt = Time.time;
+                if (MyMachine != m.Id) { _lastOwnMotionAt = Time.time; _leavingSince = -1f; _awaySince = -1f; }
                 MyMachine = m.Id;
                 Physics.ReleaseMachine(m.Id); Screen.Release(m.Id);
                 Movers.Release(m.Id);            // we drive it now, nobody streams it to us

@@ -1,47 +1,54 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 
 namespace TcgMultiplayer.Game
 {
     /// <summary>
-    /// On the owner's side: which parts of the machine you're playing MOVED
-    /// during your round without being sent to anyone?
+    /// Parts of a machine that move but are neither rigidbodies (the physics
+    /// stream) nor text or its parents (the screen mirror): claw and key-game
+    /// carriages, Speed Drop's turntable, Cuckoo's clock arms, the skee-ball
+    /// throw arm, the ticket track. 0.16.13 only listed them; the sweep found
+    /// one on almost every cabinet, and on the claw and Prizemaster it was the
+    /// arm itself — the whole point of watching.
     ///
-    /// Only rigidbodies go over the physics stream, and only text (and the
-    /// parents of text) over the screen mirror. Treasure's shovel carriage was
-    /// neither until the countdown happened to ride on it, and for every
-    /// cabinet nobody has watched yet there could be an arm, a wheel or a
-    /// flipper doing the same: moving for the player, parked for the watcher.
-    /// This finds them from the player's side, with no names and no second
-    /// person — one round on each cabinet and the log says which ones need
-    /// streaming.
+    /// The owner samples every drawn, non-body part under the machine root on
+    /// the screen mirror's clock. Anything whose LOCAL pose changes is a mover
+    /// from then on, and rides in the screen packet (reliable, ordered) as a
+    /// number plus a pose; the path goes once per keyframe. Local poses, so a
+    /// part moved only by its parent costs nothing.
     /// </summary>
     internal sealed class UnsentMovers
     {
         private sealed class Part
         {
             public Transform T;
+            public string Key;
             public Vector3 Pos;
             public Quaternion Rot;
             public int Moves;
+            public bool Live;
+            public ushort Id;
+            public bool Defined;
+            public Vector3 SentPos;
+            public Quaternion SentRot;
         }
 
-        private const float SampleEvery = 0.25f;
         private const int MaxParts = 3000;
+        private const int MaxLive = 400;
 
         private readonly List<Part> _parts = new List<Part>(256);
+        private readonly List<Part> _live = new List<Part>(64);
         private uint _machine;
         private string _label;
-        private float _nextAt;
+        private Transform _root;
 
-        public void Tick(Machine m, Func<Transform, bool> sentByScreen)
+        /// <summary>Called on the screen mirror's clock while we own a machine.</summary>
+        public void Sample(Machine m, Func<Transform, bool> sentByScreen)
         {
             if (m == null || m.Root == null) return;
             if (m.Id != _machine) { End(); Begin(m, sentByScreen); }
-            float now = Time.time;
-            if (now < _nextAt) return;
-            _nextAt = now + SampleEvery;
 
             for (int i = 0; i < _parts.Count; i++)
             {
@@ -51,9 +58,18 @@ namespace TcgMultiplayer.Game
                 var lr = p.T.localRotation;
                 if ((lp - p.Pos).sqrMagnitude > 0.001f * 0.001f || Quaternion.Angle(lr, p.Rot) > 0.5f)
                 {
-                    p.Moves++;
                     p.Pos = lp;
                     p.Rot = lr;
+                    // A part that has left the machine (the player's own club
+                    // card goes back to their hand) is not the machine's.
+                    if (!p.T.IsChildOf(_root)) continue;
+                    p.Moves++;
+                    if (!p.Live && _live.Count < MaxLive)
+                    {
+                        p.Live = true;
+                        p.Id = (ushort)_live.Count;
+                        _live.Add(p);
+                    }
                 }
             }
         }
@@ -61,61 +77,105 @@ namespace TcgMultiplayer.Game
         private void Begin(Machine m, Func<Transform, bool> sentByScreen)
         {
             _parts.Clear();
+            _live.Clear();
             _machine = m.Id;
             _label = m.Label;
-            Walk(m.Root, m.Root, sentByScreen);
+            _root = m.Root;
+            Walk(m.Root, m.Root, "", sentByScreen);
         }
 
-        /// <summary>
-        /// Everything that draws, or has something drawn under it, and isn't a
-        /// rigidbody or riding on one. Returns whether anything at or below
-        /// draws.
-        /// </summary>
-        private bool Walk(Transform t, Transform root, Func<Transform, bool> sentByScreen)
+        private bool Walk(Transform t, Transform root, string key, Func<Transform, bool> sentByScreen)
         {
             if (t.GetComponent<Rigidbody>() != null) return false;     // streamed, with everything on it
             bool draws = t.GetComponent<Renderer>() != null;
+            Dictionary<string, int> seen = t.childCount > 1 ? new Dictionary<string, int>(t.childCount) : null;
             for (int c = 0; c < t.childCount; c++)
-                if (Walk(t.GetChild(c), root, sentByScreen)) draws = true;
+            {
+                var ch = t.GetChild(c);
+                int n = 0;
+                if (seen != null) { seen.TryGetValue(ch.name, out n); seen[ch.name] = n + 1; }
+                string ck = (key.Length == 0 ? "" : key + "/") + (n == 0 ? ch.name : ch.name + "#" + n);
+                if (Walk(ch, root, ck, sentByScreen)) draws = true;
+            }
             if (draws && t != root && _parts.Count < MaxParts && (sentByScreen == null || !sentByScreen(t)))
-                _parts.Add(new Part { T = t, Pos = t.localPosition, Rot = t.localRotation });
+                _parts.Add(new Part { T = t, Key = key, Pos = t.localPosition, Rot = t.localRotation });
             return draws;
         }
 
-        /// <summary>Says what moved and wasn't sent, once per round.</summary>
+        /// <summary>
+        /// The movers that need saying in this packet: every live one on a
+        /// keyframe, otherwise those that moved since we last said. Written
+        /// after the screen's own fields; returns how many.
+        /// </summary>
+        public int Write(BinaryWriter w, bool keyframe)
+        {
+            _send.Clear();
+            for (int i = 0; i < _live.Count; i++)
+            {
+                var p = _live[i];
+                if (p.T == null || !p.T.IsChildOf(_root)) continue;
+                if (keyframe || !p.Defined
+                    || (p.T.localPosition - p.SentPos).sqrMagnitude > 0.0005f * 0.0005f
+                    || Quaternion.Angle(p.T.localRotation, p.SentRot) > 0.2f)
+                    _send.Add(p);
+            }
+            w.Write((ushort)_send.Count);
+            for (int i = 0; i < _send.Count; i++)
+            {
+                var p = _send[i];
+                bool define = keyframe || !p.Defined;
+                p.Defined = true;
+                p.SentPos = p.T.localPosition;
+                p.SentRot = p.T.localRotation;
+                w.Write(p.Id);
+                w.Write((byte)((define ? 1 : 0) | (p.T.gameObject.activeSelf ? 2 : 0)));
+                if (define) WriteStr(w, p.Key);
+                w.Write(p.SentPos.x); w.Write(p.SentPos.y); w.Write(p.SentPos.z);
+                var q = p.SentRot;
+                w.Write(Q(q.x)); w.Write(Q(q.y)); w.Write(Q(q.z)); w.Write(Q(q.w));
+            }
+            Sent += _send.Count;
+            return _send.Count;
+        }
+        private readonly List<Part> _send = new List<Part>(64);
+        public int Sent;
+        public bool AnyLive { get { return _live.Count > 0; } }
+
+        private static short Q(float v) { return (short)Mathf.Clamp(Mathf.RoundToInt(v * 32767f), -32767, 32767); }
+        public static float DeQ(short v) { return v / 32767f; }
+
+        private static void WriteStr(BinaryWriter w, string s)
+        {
+            var b = System.Text.Encoding.UTF8.GetBytes(s ?? "");
+            w.Write((ushort)b.Length);
+            w.Write(b);
+        }
+
+        /// <summary>Says what moved, once per lease.</summary>
         public void End()
         {
             if (_machine == 0) return;
-            var moved = new List<Part>();
-            for (int i = 0; i < _parts.Count; i++)
-                if (_parts[i].T != null && _parts[i].Moves >= 2) moved.Add(_parts[i]);
-
-            // Only the top of a moving chain: a carriage and the three things
-            // bolted to it are one part.
             var tops = new List<Part>();
-            var movedSet = new HashSet<Transform>();
-            for (int i = 0; i < moved.Count; i++) movedSet.Add(moved[i].T);
-            for (int i = 0; i < moved.Count; i++)
+            var liveSet = new HashSet<Transform>();
+            for (int i = 0; i < _live.Count; i++) if (_live[i].T != null) liveSet.Add(_live[i].T);
+            for (int i = 0; i < _live.Count; i++)
             {
-                bool underMoved = false;
-                var a = moved[i].T.parent;
-                while (a != null) { if (movedSet.Contains(a)) { underMoved = true; break; } a = a.parent; }
-                if (!underMoved) tops.Add(moved[i]);
+                var p = _live[i];
+                if (p.T == null || p.Moves < 2) continue;
+                bool under = false;
+                var a = p.T.parent;
+                while (a != null) { if (liveSet.Contains(a)) { under = true; break; } a = a.parent; }
+                if (!under) tops.Add(p);
             }
             tops.Sort((x, y) => y.Moves.CompareTo(x.Moves));
-
-            if (tops.Count == 0)
-                Plugin.Log("Unsent movers on " + _label + ": none - of " + _parts.Count
-                           + " drawn parts that aren't bodies or screen, nothing moved during your round.");
-            else
-            {
-                var sb = new System.Text.StringBuilder();
-                for (int i = 0; i < tops.Count && i < 12; i++)
-                    sb.Append("  ").Append(NetId.Path(tops[i].T)).Append(" (moved in ").Append(tops[i].Moves).Append(" samples)");
-                Plugin.Log("Unsent movers on " + _label + ": " + tops.Count + " parts moved for you and NOT for anyone watching:" + sb);
-            }
-            Count += tops.Count;
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < tops.Count && i < 10; i++)
+                sb.Append("  ").Append(tops[i].Key).Append(" (").Append(tops[i].Moves).Append(")");
+            Plugin.Log("Movers on " + _label + ": " + _live.Count + " parts that aren't bodies or screen moved and were sent"
+                       + (_live.Count >= MaxLive ? " (hit the cap of " + MaxLive + ")" : "") + "." + sb);
+            Count += _live.Count;
             _parts.Clear();
+            _live.Clear();
             _machine = 0;
         }
 

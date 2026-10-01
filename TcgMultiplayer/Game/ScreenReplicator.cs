@@ -88,12 +88,21 @@ namespace TcgMultiplayer.Game
             /// <summary>Slides in progress: each placed object eases from where it's drawn to where the owner has it.</summary>
             public readonly Dictionary<Transform, Ease> Easing = new Dictionary<Transform, Ease>();
             public float Gap = PollEvery, LastPacketAt = -1f;
+            public readonly Dictionary<ushort, Transform> MoverIds = new Dictionary<ushort, Transform>();
+            public Dictionary<string, Transform> AllByKey;
+            public readonly Dictionary<Transform, Quaternion> OriginalRot = new Dictionary<Transform, Quaternion>();
+            public int MoverMisses;
         }
         private sealed class Ease
         {
             public Vector3 From, To;
             public float At, Dur;
+            public bool Turns;
+            public Quaternion FromRot, ToRot;
         }
+
+        /// <summary>Set by the director; the owner's moving-part sampler.</summary>
+        public UnsentMovers Movers;
 
         /// <summary>
         /// Further than this in one packet is a jump, not a slide — the
@@ -268,7 +277,8 @@ namespace TcgMultiplayer.Game
                     changed.Add(f);
                 }
             }
-            if (changed.Count == 0) return null;
+            if (Movers != null) Movers.Sample(m, SentByScreen);
+            if (changed.Count == 0 && (Movers == null || !Movers.AnyLive)) return null;
 
             var buf = new System.IO.MemoryStream(256);
             var w = new System.IO.BinaryWriter(buf, Encoding.UTF8);
@@ -288,6 +298,11 @@ namespace TcgMultiplayer.Game
                     w.Write(lp.x); w.Write(lp.y); w.Write(lp.z);
                 }
             }
+            // Moving parts that are neither bodies nor text, after the fields.
+            // An old watcher stops reading at the end of the fields and never
+            // sees them, which is the right failure.
+            int movers = Movers != null ? Movers.Write(w, keyframe) : 0;
+            if (changed.Count == 0 && movers == 0) return null;
             Sent += changed.Count;
             return buf.ToArray();
         }
@@ -391,9 +406,93 @@ namespace TcgMultiplayer.Game
 
                 applied++;
             }
+            if (r.BaseStream.Position + 2 <= r.BaseStream.Length) ApplyMovers(m, w, r, now);
+
             Applied += applied;
             Unmatched += missing;
             if (Report != null) Report.Screen(m.Id, w.ByKey.Count, applied);
+        }
+
+        private void ApplyMovers(Machine m, Watched w, System.IO.BinaryReader r, float now)
+        {
+            int n = r.ReadUInt16();
+            for (int i = 0; i < n; i++)
+            {
+                ushort id = r.ReadUInt16();
+                byte flags = r.ReadByte();
+                string key = (flags & 1) != 0 ? ReadStr(r) : null;
+                var pos = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                var rot = new Quaternion(UnsentMovers.DeQ(r.ReadInt16()), UnsentMovers.DeQ(r.ReadInt16()),
+                                         UnsentMovers.DeQ(r.ReadInt16()), UnsentMovers.DeQ(r.ReadInt16()));
+                bool on = (flags & 2) != 0;
+
+                Transform tr;
+                if (key != null)
+                {
+                    if (w.AllByKey == null) w.AllByKey = IndexAll(m.Root);
+                    if (!w.AllByKey.TryGetValue(key, out tr) || tr == null)
+                    {
+                        w.MoverIds.Remove(id);
+                        if (w.MoverMisses++ < 4)
+                            Plugin.Log("Mover on " + m.Label + " we haven't got: " + key);
+                        continue;
+                    }
+                    w.MoverIds[id] = tr;
+                }
+                else if (!w.MoverIds.TryGetValue(id, out tr) || tr == null) continue;
+
+                // A part that moves for the player is on for the player, and
+                // so is everything it hangs from. The skee-ball throw arm sits
+                // under a controller that only switches on for a round.
+                if (tr.gameObject.activeSelf != on) SetActiveRemembering(w, tr.gameObject, on);
+                if (on)
+                {
+                    var a = tr.parent;
+                    while (a != null && a != m.Root) { if (!a.gameObject.activeSelf) SetActiveRemembering(w, a.gameObject, true); a = a.parent; }
+                }
+
+                if (!w.OriginalPos.ContainsKey(tr)) w.OriginalPos[tr] = tr.localPosition;
+                if (!w.OriginalRot.ContainsKey(tr)) w.OriginalRot[tr] = tr.localRotation;
+
+                float mag = Mathf.Sqrt(rot.x * rot.x + rot.y * rot.y + rot.z * rot.z + rot.w * rot.w);
+                if (mag > 0.0001f) rot = new Quaternion(rot.x / mag, rot.y / mag, rot.z / mag, rot.w / mag);
+
+                Ease e;
+                bool known = w.Easing.TryGetValue(tr, out e);
+                if (!known) { e = new Ease(); w.Easing[tr] = e; tr.localPosition = pos; tr.localRotation = rot; }
+                e.Turns = true;
+                e.From = tr.localPosition;
+                e.FromRot = tr.localRotation;
+                e.To = pos;
+                e.ToRot = rot;
+                e.At = now;
+                e.Dur = w.Gap * 1.1f;
+                w.Placed[tr] = tr.localPosition;
+                MoversApplied++;
+            }
+        }
+        public int MoversApplied;
+
+        /// <summary>Every transform under the root by the same path the owner names them by.</summary>
+        private static Dictionary<string, Transform> IndexAll(Transform root)
+        {
+            var map = new Dictionary<string, Transform>(1024);
+            IndexChildren(root, "", map);
+            return map;
+        }
+
+        private static void IndexChildren(Transform t, string key, Dictionary<string, Transform> map)
+        {
+            Dictionary<string, int> seen = t.childCount > 1 ? new Dictionary<string, int>(t.childCount) : null;
+            for (int c = 0; c < t.childCount; c++)
+            {
+                var ch = t.GetChild(c);
+                int n = 0;
+                if (seen != null) { seen.TryGetValue(ch.name, out n); seen[ch.name] = n + 1; }
+                string ck = (key.Length == 0 ? "" : key + "/") + (n == 0 ? ch.name : ch.name + "#" + n);
+                if (!map.ContainsKey(ck)) map[ck] = ch;
+                IndexChildren(ch, ck, map);
+            }
         }
 
         private static void SetActiveRemembering(Watched w, GameObject go, bool on)
@@ -423,6 +522,7 @@ namespace TcgMultiplayer.Game
                     var e = p.Value;
                     float k = e.Dur <= 0.0001f ? 1f : Mathf.Clamp01((now - e.At) / e.Dur);
                     var want = Vector3.LerpUnclamped(e.From, e.To, k);
+                    if (e.Turns) tr.localRotation = Quaternion.Slerp(e.FromRot, e.ToRot, k);
                     Vector3 placed;
                     if (w.Placed.TryGetValue(tr, out placed) && (tr.localPosition - placed).sqrMagnitude > 1e-6f) MovesOverridden++;
                     tr.localPosition = want;
@@ -444,6 +544,8 @@ namespace TcgMultiplayer.Game
                 if (kv.Key.Comp != null) WriteText(kv.Key, kv.Value);
             foreach (var kv in w.OriginalActive)
                 if (kv.Key != null) kv.Key.SetActive(kv.Value);
+            foreach (var kv in w.OriginalRot)
+                if (kv.Key != null) kv.Key.localRotation = kv.Value;
             foreach (var kv in w.OriginalPos)
                 if (kv.Key != null) kv.Key.localPosition = kv.Value;
             _watched.Remove(machineId);
