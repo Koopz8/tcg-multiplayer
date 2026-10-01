@@ -1474,6 +1474,7 @@ namespace TcgMultiplayer.Game
         public void LateTick()
         {
             Screen.LateRender();
+            Physics.LateRender();
         }
 
         private void OnScreen(CSteamID from, uint machineId, byte[] payload)

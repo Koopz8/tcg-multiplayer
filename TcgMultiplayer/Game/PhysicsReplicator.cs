@@ -118,6 +118,12 @@ namespace TcgMultiplayer.Game
             public Vector3 FromPos;
             public Quaternion FromRot;
             public float At;
+            /// <summary>When FromPos was true, on the same clock as At.</summary>
+            public float FromAt;
+            public float Dur = 0.05f;
+            /// <summary>What Render last put on screen, so LateRender can put it back.</summary>
+            public Vector3 DrawnPos;
+            public Quaternion DrawnRot;
         }
         private sealed class Watched
         {
@@ -173,7 +179,9 @@ namespace TcgMultiplayer.Game
             /// counter upstream of here would still say the pose arrived.
             /// </summary>
             public readonly Dictionary<Rigidbody, Vector3> Wrote = new Dictionary<Rigidbody, Vector3>(512);
-            public int Overridden, Writes;
+            public int Overridden, Writes, LateFixes;
+            /// <summary>Running average of the time between pose packets.</summary>
+            public float Gap = 0.05f, LastPacketAt = -1f;
             public string OverriddenExample;
             public float OverriddenWorst;
         }
@@ -182,6 +190,7 @@ namespace TcgMultiplayer.Game
             public Vector3 Pos;
             public Quaternion Rot;
             public bool Kinematic;
+            public RigidbodyInterpolation Interp;
         }
         private readonly Dictionary<uint, Watched> _watched = new Dictionary<uint, Watched>();
         private readonly List<Rigidbody> _scratch = new List<Rigidbody>(128);
@@ -800,7 +809,15 @@ namespace TcgMultiplayer.Game
                 if (rb == null) continue;
                 if (!w.Before.ContainsKey(rb))
                 {
-                    w.Before[rb] = new Snapshot { Pos = rb.transform.position, Rot = rb.transform.rotation, Kinematic = rb.isKinematic };
+                    w.Before[rb] = new Snapshot { Pos = rb.transform.position, Rot = rb.transform.rotation, Kinematic = rb.isKinematic, Interp = rb.interpolation };
+                    // A body we place by hand must not also be placed by the
+                    // physics interpolator, which writes the transform every
+                    // frame from where the rigidbody was at the last step.
+                    if (rb.interpolation != RigidbodyInterpolation.None)
+                    {
+                        rb.interpolation = RigidbodyInterpolation.None;
+                        InterpolationOff++;
+                    }
                     var cols = rb.GetComponentsInChildren<Collider>(true);
                     for (int c = 0; c < cols.Length; c++)
                     {
@@ -818,6 +835,7 @@ namespace TcgMultiplayer.Game
             {
                 w.RootDescribed = true;
                 DescribeRoot(m, _scratch, "Watcher");
+                SayUnsentParents(m, _scratch);
                 Plugin.Log("Switched off " + w.CollidersOff.Count + " colliders on " + w.Before.Count + " bodies in " + m.Label
                            + " while it's being played — they're scenery here until release.");
             }
@@ -1025,6 +1043,12 @@ namespace TcgMultiplayer.Game
             var rot = m.Root.rotation;
             float now = Time.time;
             int changed = 0, applied = 0;
+            if (w.LastPacketAt >= 0f)
+            {
+                float gap = now - w.LastPacketAt;
+                if (gap > 0.005f && gap < 0.5f) w.Gap = Mathf.Lerp(w.Gap, gap, 0.1f);
+            }
+            w.LastPacketAt = now;
 
             for (int k = 0; k < poses; k++)
             {
@@ -1052,19 +1076,32 @@ namespace TcgMultiplayer.Game
                 if (rb.gameObject.activeSelf != on) SetActiveRemembering(w, rb.gameObject, on);
 
                 var t = w.Targets[i];
-                t.Pos = origin + rot * lp;
-                t.Rot = rot * Normalise(lr);
+                var newPos = origin + rot * lp;
+                var newRot = rot * Normalise(lr);
 
                 // The first pose a stand-in ever gets puts it there outright.
                 // Easing it in from wherever the prefab was would drag it across
                 // the room in front of everyone.
-                if (w.StandInWaiting.Remove(rb))
+                bool first = w.StandInWaiting.Remove(rb);
+                if (first)
                 {
-                    rb.transform.position = t.Pos;
-                    rb.transform.rotation = t.Rot;
+                    rb.transform.position = newPos;
+                    rb.transform.rotation = newRot;
                 }
+
+                // Ease from where it's drawn to the new pose over one packet
+                // interval, measured, not a fixed 0.1 s. Packets come every
+                // ~50 ms, so the old fixed ease never finished: each packet
+                // restarted it with half the distance left, and the speed of
+                // anything moving steadily — the Treasure shovel — lurched
+                // twenty times a second. Taking exactly one interval means a
+                // steady mover is drawn at a steady speed.
                 t.FromPos = rb.transform.position;
                 t.FromRot = rb.transform.rotation;
+                t.FromAt = now;
+                t.Dur = w.Gap * 1.1f;
+                t.Pos = newPos;
+                t.Rot = newRot;
                 t.At = now;
                 applied++;
             }
@@ -1132,10 +1169,14 @@ namespace TcgMultiplayer.Game
                         }
                     }
 
-                    float k = InterpDelay <= 0f ? 1f : Mathf.Clamp01((now - t.At) / InterpDelay);
-                    tr.position = Vector3.Lerp(t.FromPos, t.Pos, k);
-                    tr.rotation = Quaternion.Slerp(t.FromRot, t.Rot, k);
-                    w.Wrote[rb] = tr.position;
+                    float k = t.Dur <= 0.0001f ? 1f : Mathf.Clamp01((now - t.FromAt) / t.Dur);
+                    var pos = Vector3.Lerp(t.FromPos, t.Pos, k);
+                    var rotq = Quaternion.Slerp(t.FromRot, t.Rot, k);
+                    tr.position = pos;
+                    tr.rotation = rotq;
+                    t.DrawnPos = pos;
+                    t.DrawnRot = rotq;
+                    w.Wrote[rb] = pos;
                     w.Writes++;
                 }
             }
@@ -1148,6 +1189,78 @@ namespace TcgMultiplayer.Game
         }
 
         private float _nextSeenAt;
+
+        /// <summary>
+        /// Only rigidbodies are streamed. A part that moves because its PARENT
+        /// is moved — Treasure's shovel hangs off X/Y/Z carriages the joystick
+        /// controller slides around — is placed right, but the carriages
+        /// themselves, if they draw anything, stay parked on the watcher's
+        /// side. This names any such parent once, so we know whether there's
+        /// a visible arm being left behind.
+        /// </summary>
+        private static void SayUnsentParents(Machine m, List<Rigidbody> bodies)
+        {
+            var named = new HashSet<Transform>();
+            string list = null;
+            for (int i = 0; i < bodies.Count; i++)
+            {
+                var rb = bodies[i];
+                if (rb == null) continue;
+                var t = rb.transform.parent;
+                while (t != null && t != m.Root)
+                {
+                    if (named.Add(t) && t.GetComponent<Rigidbody>() == null)
+                    {
+                        var r = t.GetComponent<Renderer>();
+                        int kids = 0;
+                        for (int c = 0; c < t.childCount; c++)
+                        {
+                            var ch = t.GetChild(c);
+                            if (ch.GetComponent<Renderer>() != null && ch.GetComponent<Rigidbody>() == null) kids++;
+                        }
+                        if (r != null || kids > 0)
+                            list = (list == null ? "" : list + "  ") + t.name + (r != null ? "(draws)" : "") + (kids > 0 ? "(+" + kids + " drawn children)" : "");
+                    }
+                    t = t.parent;
+                }
+            }
+            Plugin.Log(list == null
+                ? "Parents of " + m.Label + "'s moving parts: none draw anything, so nothing's left behind."
+                : "Parents of " + m.Label + "'s moving parts that draw but aren't sent: " + list);
+        }
+
+        public int InterpolationOff;
+
+        /// <summary>
+        /// Runs after the cabinet's own LateUpdate logic. Treasure's joystick
+        /// controller positions the shovel's carriage in LateUpdate, after our
+        /// Update had placed the shovel — so on those frames the frame that got
+        /// drawn was the controller's, not ours: "something here moved a body
+        /// after we placed it", 20-odd times every five seconds, always the
+        /// shovel. Putting the pose back here means what's drawn is ours.
+        /// </summary>
+        public void LateRender()
+        {
+            if (_watched.Count == 0) return;
+            foreach (var kv in _watched)
+            {
+                var w = kv.Value;
+                for (int i = 0; i < w.Aligned.Count && i < w.Targets.Count; i++)
+                {
+                    var rb = w.Aligned[i];
+                    if (rb == null) continue;
+                    var t = w.Targets[i];
+                    if (t.At <= 0f) continue;
+                    var tr = rb.transform;
+                    if ((tr.position - t.DrawnPos).sqrMagnitude > 0.000001f)
+                    {
+                        w.LateFixes++;
+                        tr.position = t.DrawnPos;
+                        tr.rotation = t.DrawnRot;
+                    }
+                }
+            }
+        }
 
         /// <summary>
         /// A cabinet at rest doesn't draw its coins and chests one by one. The
@@ -1241,9 +1354,10 @@ namespace TcgMultiplayer.Game
                           ? w.Overridden + " times something here moved a body after we placed it (worst " + w.OverriddenWorst.ToString("0.00")
                             + " m, " + w.OverriddenExample + ")"
                           : "Nothing here moved them after we did")
-                       + ". " + w.Writes + " writes. This window: " + fps.ToString("0") + " fps, "
-                       + (Application.isFocused ? "focused" : "not focused") + ".");
-            w.Overridden = 0; w.Writes = 0; w.OverriddenWorst = 0f; w.OverriddenExample = null;
+                       + ". " + w.LateFixes + " put back after the cabinet's late update. " + w.Writes + " writes. This window: " + fps.ToString("0") + " fps, "
+                       + (Application.isFocused ? "focused" : "not focused") + ", packets every " + (w.Gap * 1000f).ToString("0") + " ms"
+                       + (InterpolationOff > 0 ? ", " + InterpolationOff + " bodies had physics interpolation switched off" : "") + ".");
+            w.Overridden = 0; w.Writes = 0; w.LateFixes = 0; w.OverriddenWorst = 0f; w.OverriddenExample = null;
         }
 
         /// <summary>Hands the machine back to local physics when we stop spectating it.</summary>
@@ -1370,6 +1484,7 @@ namespace TcgMultiplayer.Game
                 rb.transform.position = kv.Value.Pos;
                 rb.transform.rotation = kv.Value.Rot;
                 rb.isKinematic = kv.Value.Kinematic;
+                rb.interpolation = kv.Value.Interp;
                 if (!kv.Value.Kinematic)
                 {
                     rb.velocity = Vector3.zero;
