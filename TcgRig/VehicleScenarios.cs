@@ -564,7 +564,7 @@ namespace TcgRig
 
                 // Every one of these once had authority over the lease. None do.
                 foreach (var s in new[] { "Card Removed", "Card Removed Inside", "Card Removed Inside 2",
-                                          "Turn Off MECH", "Button Exit Machine",
+                                          "Turn Off MECH",
                                           "Send Explore Mode", "Send Explore Mode Event",
                                           "PLAYER HIT EXIT", "Off of Ride and Done", "Off of Bus and Done" })
                 {
@@ -577,6 +577,15 @@ namespace TcgRig
                     Assert.True(!Occupancy.IsClaim(s), "'" + s + "' is not a claim");
                     Assert.True(!Occupancy.LooksLikeLeaving(s), "'" + s + "' is not a departure either");
                 }
+                // The round itself. Entered one second after Ready To Play and
+                // held until the player really leaves — as a departure it ended
+                // every Treasure round about four seconds in (0.16.5).
+                Assert.True(!Occupancy.LooksLikeLeaving("Button Exit Machine"),
+                            "the state a round is played in is not leaving");
+                Assert.True(Occupancy.IsInRound("Button Exit Machine"), "it means the round is on");
+                Assert.True(!Occupancy.IsInRound("Card Removed") && !Occupancy.IsInRound(null),
+                            "and nothing else does");
+
                 Assert.True(!Occupancy.IsClaim(null) && !Occupancy.LooksLikeLeaving(null),
                             "and neither is nothing");
 

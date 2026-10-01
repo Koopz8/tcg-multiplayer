@@ -58,7 +58,7 @@ namespace TcgMultiplayer.Game
         private static readonly HashSet<string> Departures = new HashSet<string>(StringComparer.Ordinal)
         {
             "Card Removed", "Card Removed Inside", "Card Removed Inside 2",
-            "Turn Off MECH", "Button Exit Machine",
+            "Turn Off MECH",
             "Send Explore Mode Event", "Send Explore Mode",
             "Off of Ride and Done", "Off of Bus and Done", "PLAYER HIT EXIT",
         };
@@ -66,6 +66,25 @@ namespace TcgMultiplayer.Game
         public static bool LooksLikeLeaving(string state)
         {
             return state != null && Departures.Contains(state);
+        }
+
+        /// <summary>
+        /// "Button Exit Machine" is not the exit button being pressed. It's the
+        /// state the cabinet sits in for the whole round, polling for the exit
+        /// button — every card reader in the FSM dump enters it straight from
+        /// "Ready To Play" (or "Close Door"), it has no transitions of its own,
+        /// and the real way out is the global Machine_OFF into "Card Removed".
+        ///
+        /// It used to be in the departure list. Once the departure list was
+        /// allowed to ask for a hand-back, every round asked to end one second
+        /// after it began, and on anything that sits still while you aim (the
+        /// Treasure plow) the lease was gone in under five seconds — spectating
+        /// switched off both ways. So entering it means the round is ON, and it
+        /// cancels any hand-back still pending.
+        /// </summary>
+        public static bool IsInRound(string state)
+        {
+            return state == "Button Exit Machine";
         }
 
         /// <summary>

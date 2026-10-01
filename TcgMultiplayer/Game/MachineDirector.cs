@@ -194,6 +194,14 @@ namespace TcgMultiplayer.Game
                 if (Occupancy.LooksLikeLeaving(state) && m.OwnedByMe)
                     live._leavingSince = Time.time;
 
+                // And the round is running: whatever asked for a hand-back
+                // before this was wrong about it.
+                if (Occupancy.IsInRound(state) && m.OwnedByMe && live._leavingSince >= 0f)
+                {
+                    live._leavingSince = -1f;
+                    Plugin.Log("Keeping " + m.Label + " - the round is on, so the hand-back asked for earlier is off.");
+                }
+
                 // Ending the lease on a state name has now been wrong twice, in
                 // both directions, and each time it silently switched spectating
                 // off for the whole round. So it no longer ends on one at all —
@@ -245,7 +253,8 @@ namespace TcgMultiplayer.Game
 
             Plugin.Log("State: " + m.Label + " -> \"" + state + "\""
                        + (m.OwnedByMe ? " [ours]" : m.Owner != 0 ? " [theirs]" : " [free]")
-                       + (Occupancy.LooksLikeLeaving(state) ? "  (sounds like leaving; ignored)" : "")
+                       + (Occupancy.LooksLikeLeaving(state) ? "  (leaving - hand back once it's still)" : "")
+                       + (Occupancy.IsInRound(state) ? "  (round on)" : "")
                        + (n + 1 == MaxStateLinesPerMachine ? "  (that's enough of these)" : ""));
         }
 
