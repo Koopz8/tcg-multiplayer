@@ -25,6 +25,29 @@ namespace TcgMultiplayer.Game
     /// Bones are always on and cost a bit each, which is the price of not
     /// having to know anything: a whole body is about thirty bytes, sent only
     /// when something changes.
+    ///
+    /// WHICH WAS WRONG, and switched off here until it can be done by name.
+    /// "Walk both the same way and the nth object here is the nth object there"
+    /// was the entire premise and it only holds when both sides are looking at
+    /// the same hierarchy. They are not. The owner packs from the LIVE mesh in
+    /// their scene; the watcher's body is a clone of a loaded ASSET, because
+    /// two people usually pick different characters —
+    ///
+    ///   Local guest (window 2) is playing as MANDY Mesh.
+    ///   Character "MANDY Mesh": cloning MANDY Mesh (loaded asset).
+    ///
+    /// A live mesh picks up children at runtime that the asset has never had,
+    /// and one extra child at any level shifts every bit after it. From there
+    /// the mask is switching whatever happens to be at that index, and most of
+    /// what is under a character is bones. Switch a bone's object off and it
+    /// stops animating, its children keep whatever transform they had, and the
+    /// skinned mesh draws against a frozen bone: eyes that float away from the
+    /// head and tilt with every step.
+    ///
+    /// "29 parts switched over 26 updates" looked like one prop per update. It
+    /// was 29 wrong nodes. A count being small is not the same as it being
+    /// right, and I should have sent something that could prove the two bodies
+    /// matched instead of assuming it.
     /// </summary>
     internal static class BodyProps
     {
@@ -55,6 +78,61 @@ namespace TcgMultiplayer.Game
                 into.Add(c);
                 Walk(c, into);
             }
+        }
+
+        /// <summary>
+        /// Off until the mirroring is done by name with a check that the two
+        /// bodies agree. Nothing is sent and nothing is applied while this is
+        /// false, so a body is left exactly as its source had it.
+        /// </summary>
+        public const bool Mirror = false;
+
+        /// <summary>
+        /// Said once, the first time a body is built: what the live mesh here has
+        /// that the clone does not, and what each side thinks is switched on.
+        /// This is the measurement that should have come before the fix — it
+        /// names the objects involved instead of leaving me to guess which of
+        /// them is a ticket pile.
+        /// </summary>
+        public static void Compare(Transform live, Transform clone)
+        {
+            if (live == null || clone == null) return;
+
+            var a = new List<Transform>(256); Walk(live, a);
+            var b = new List<Transform>(256); Walk(clone, b);
+
+            int diverge = -1;
+            for (int i = 0; i < a.Count && i < b.Count; i++)
+                if (a[i] == null || b[i] == null || a[i].name != b[i].name) { diverge = i; break; }
+
+            Plugin.Log("Body walk: " + a.Count + " objects under our own " + live.name
+                       + ", " + b.Count + " under the clone of " + clone.name
+                       + (diverge < 0
+                          ? (a.Count == b.Count ? " — same names all the way down." : " — same as far as the shorter one goes.")
+                          : " — they stop matching at " + diverge + " (\"" + (a[diverge] != null ? a[diverge].name : "?")
+                            + "\" here, \"" + (b[diverge] != null ? b[diverge].name : "?") + "\" there)."));
+
+            Describe("ours", a);
+            Describe("theirs", b);
+        }
+
+        private static void Describe(string side, List<Transform> all)
+        {
+            var sb = new System.Text.StringBuilder();
+            int said = 0;
+            for (int i = 0; i < all.Count && said < 30; i++)
+            {
+                var t = all[i];
+                if (t == null) continue;
+                var r = t.GetComponent<Renderer>();
+                if (r == null) continue;
+                said++;
+                sb.Append(i).Append(':').Append(t.name)
+                  .Append(t.gameObject.activeSelf ? "" : " (object off)")
+                  .Append(r.enabled ? "" : " (renderer off)")
+                  .Append("  ");
+            }
+            Plugin.Log("Things you can see, " + side + ": " + (said == 0 ? "none" : sb.ToString()));
         }
 
         public static byte[] Pack(Transform mesh)

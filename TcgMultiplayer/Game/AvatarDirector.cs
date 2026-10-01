@@ -29,6 +29,7 @@ namespace TcgMultiplayer.Game
         private float _nextPropsAt, _nextPropsResendAt;
         private readonly Dictionary<ulong, byte[]> _theirProps = new Dictionary<ulong, byte[]>();
         public int PropsSwitched;
+        private bool _comparedBody;
 
         // Mirror mode plumbing
         private readonly Queue<KeyValuePair<float, byte[]>> _mirrorQueue = new Queue<KeyValuePair<float, byte[]>>();
@@ -108,6 +109,7 @@ namespace TcgMultiplayer.Game
         {
             byte[] mask;
             RemoteAvatar a;
+            if (!BodyProps.Mirror) return;
             if (!_theirProps.TryGetValue(peer, out mask)) return;
             if (!_avatars.TryGetValue(peer, out a) || !a.Alive) return;
             PropsSwitched += BodyProps.Apply(a.Go.transform, mask);
@@ -139,7 +141,7 @@ namespace TcgMultiplayer.Game
             // the hand is a prop that was always part of the character, so this
             // is what tells everyone else whether it is showing — and, at the
             // start, that it is NOT, which is the bug it was written for.
-            if (_session.State == SessionState.InLobby && _rig.Valid && Time.time >= _nextPropsAt)
+            if (BodyProps.Mirror && _session.State == SessionState.InLobby && _rig.Valid && Time.time >= _nextPropsAt)
             {
                 _nextPropsAt = Time.time + 0.25f;
                 var mask = BodyProps.Pack(_rig.Mesh);
@@ -280,9 +282,14 @@ namespace TcgMultiplayer.Game
                 av = new RemoteAvatar();
                 if (!av.Spawn(source, label)) return;
                 _avatars[key] = av;
-                // A fresh clone carries whatever props were hanging off the
-                // character, switched on. Put them right before it is drawn.
                 ApplyProps(key);
+                // Once per session: what our own mesh has that their clone does
+                // not. The blind bitmask assumed these two were the same shape.
+                if (!_comparedBody)
+                {
+                    _comparedBody = true;
+                    BodyProps.Compare(_rig.Mesh, av.Go.transform);
+                }
             }
             av.Label = label;
             av.Push(st);
@@ -322,6 +329,7 @@ namespace TcgMultiplayer.Game
             _theirProps.Clear();
             BodyProps.Switched = 0;
             BodyProps.Applied = 0;
+            _comparedBody = false;
         }
 
         /// <summary>
