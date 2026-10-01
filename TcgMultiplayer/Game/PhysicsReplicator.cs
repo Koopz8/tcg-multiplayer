@@ -46,6 +46,16 @@ namespace TcgMultiplayer.Game
         public const float RotScale = 32767f;
 
         private const ushort FlagManifest = 1;
+        /// <summary>This packet carries only some of the bodies, each with its index.</summary>
+        private const ushort FlagSparse = 2;
+        /// <summary>
+        /// A share of the bodies goes out every packet whether they moved or
+        /// not, cycling through the list, so that at 20 Hz every body is
+        /// refreshed inside a second. Without it an unreliable packet carrying
+        /// the last pose of something that then stopped would strand it there
+        /// until the next keyframe.
+        /// </summary>
+        private const int RefreshSlice = 20;
         private const float ManifestKeyframeEvery = 5f;
         private const float SummaryEvery = 5f;
 
@@ -54,6 +64,9 @@ namespace TcgMultiplayer.Game
         private readonly List<Rigidbody> _lastSentBodies = new List<Rigidbody>(128);
         private readonly List<string> _keys = new List<string>(128);
         private readonly List<Vector3> _lastSentPos = new List<Vector3>(128);
+        private readonly List<bool> _lastSentOn = new List<bool>(128);
+        private readonly List<int> _send = new List<int>(128);
+        private int _refreshCursor, _sizeComplaints;
         private uint _lastSentMachine;
         private float _nextManifestAt;
 
@@ -98,9 +111,16 @@ namespace TcgMultiplayer.Game
             public int LastLocalCount = -1, DepartureLogs;
             public readonly HashSet<Rigidbody> AlignedSet = new HashSet<Rigidbody>();
             public readonly HashSet<Rigidbody> Counted = new HashSet<Rigidbody>();
-            public int Matched, Unmatched;
+            public int Matched, Unmatched, Stood;
             public bool HaveManifest, VisibilitySaid, RootDescribed;
             public string LastMismatch;
+            /// <summary>
+            /// Bodies the owner has that we never will, one per manifest key,
+            /// built once and reused. Destroyed on release.
+            /// </summary>
+            public readonly Dictionary<string, Rigidbody> StandIns = new Dictionary<string, Rigidbody>();
+            public readonly HashSet<string> StandInGaveUp = new HashSet<string>();
+            public bool StandInCapSaid;
         }
         private struct Snapshot
         {
@@ -252,6 +272,43 @@ namespace TcgMultiplayer.Game
             WalkChildren(root, "", into, keys);
         }
 
+        /// <summary>
+        /// The player's club card, and the ring clasp hanging off it, are not
+        /// part of the cabinet — they are the card the player pushed into the
+        /// slot, and they sit under POWER CNTRLR/CARD SPOT IN for as long as
+        /// the round lasts.
+        ///
+        /// A watcher has no card in that machine, so these two bodies could
+        /// never match, and they turned up as "2 have no counterpart here" on
+        /// every single cabinet in the sweep. On Speed Drop, which has no
+        /// moving parts of its own, they were the ONLY two bodies in the
+        /// manifest, so the report called a working machine "NOTHING MATCHED".
+        /// They also account for the count-mismatch alarm firing seventy times
+        /// in one session while nothing was actually wrong.
+        ///
+        /// These are the same two bodies that broke ordinal addressing back in
+        /// 0.11, which is twice now that the owner's card has cost a day. It
+        /// does not get walked any more.
+        /// </summary>
+        private static bool IsOwnersCard(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            return name.IndexOf("PlayersClubCard", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Anything the mod itself put under the machine — a stand-in for a
+        /// body the owner has and we don't. It must never enter either walk:
+        /// it isn't part of this machine, and letting it in would make our
+        /// body count drift upward every round.
+        /// </summary>
+        private static bool IsOurs(string name)
+        {
+            return !string.IsNullOrEmpty(name) && name.StartsWith(OursPrefix, StringComparison.Ordinal);
+        }
+
+        private const string OursPrefix = "TCGMP_Stand_";
+
         private static void WalkChildren(Transform parent, string prefix, List<Rigidbody> into, List<string> keys)
         {
             Dictionary<string, int> seen = null;
@@ -260,6 +317,7 @@ namespace TcgMultiplayer.Game
             for (int i = 0; i < parent.childCount; i++)
             {
                 var t = parent.GetChild(i);
+                if (IsOwnersCard(t.name) || IsOurs(t.name)) continue;
                 string key = null;
                 if (keys != null)
                 {
@@ -318,6 +376,12 @@ namespace TcgMultiplayer.Game
             return true;
         }
 
+        private static Vector3 PoseOf(Rigidbody rb, Vector3 origin, Quaternion inv)
+        {
+            if (rb == null) return Vector3.zero;
+            return inv * (rb.transform.position - origin);
+        }
+
         /// <summary>Packs the machine's bodies relative to its own root, so the numbers stay small.</summary>
         public byte[] Pack(Machine m)
         {
@@ -350,15 +414,59 @@ namespace TcgMultiplayer.Game
             if (newMachine)
             {
                 _lastSentPos.Clear();
+                _lastSentOn.Clear();
+                _refreshCursor = 0;
                 _lastSentMachine = m.Id;
                 if (_describedOwner.Add(m.Id)) DescribeRoot(m, _bodies, "Owner");
             }
-            else if (changed) _lastSentPos.Clear();
+            else if (changed) { _lastSentPos.Clear(); _lastSentOn.Clear(); _refreshCursor = 0; }
 
             var origin = m.Root.position;
             var inv = Quaternion.Inverse(m.Root.rotation);
 
-            int size = 4 + _bodies.Count * 15;
+            // Which bodies are worth a packet. A cabinet's bodies are mostly
+            // coins and chips lying still: the host log read "5 of 206 bodies
+            // moved in the last packet" and we were sending all 206, fifteen
+            // bytes each, twenty times a second — sixty kilobytes a second for
+            // one machine, again for every extra person watching. So a
+            // non-keyframe packet carries the ones that moved, the ones that
+            // appeared or vanished, and a rolling slice of the rest.
+            //
+            // The comparison is against the pose last SENT, not last frame, so
+            // a body that moves and then stops has its final resting pose sent
+            // once and is then quiet — which is the whole point.
+            int moved = 0;
+            _send.Clear();
+            bool sparse = !manifest && _lastSentPos.Count == _bodies.Count;
+            int sliceFrom = 0, sliceTo = 0;
+            if (sparse)
+            {
+                int slice = _bodies.Count / RefreshSlice + 1;
+                if (_refreshCursor >= _bodies.Count) _refreshCursor = 0;
+                sliceFrom = _refreshCursor;
+                sliceTo = sliceFrom + slice;
+                _refreshCursor = sliceTo >= _bodies.Count ? 0 : sliceTo;
+            }
+
+            for (int i = 0; i < _bodies.Count; i++)
+            {
+                var rb = _bodies[i];
+                Vector3 lp = PoseOf(rb, origin, inv);
+                bool on = rb != null && rb.gameObject.activeInHierarchy;
+
+                bool isMoved = false;
+                if (i < _lastSentPos.Count)
+                {
+                    isMoved = (lp - _lastSentPos[i]).sqrMagnitude > 0.001f * 0.001f
+                              || i >= _lastSentOn.Count || _lastSentOn[i] != on;
+                    if (isMoved) moved++;
+                }
+
+                if (!sparse) { _send.Add(i); continue; }
+                if (isMoved || (i >= sliceFrom && i < sliceTo)) _send.Add(i);
+            }
+
+            int size = (sparse ? 6 : 4) + _send.Count * (sparse ? 17 : 15);
             byte[][] keyBytes = null;
             if (manifest)
             {
@@ -373,7 +481,7 @@ namespace TcgMultiplayer.Game
             var buf = new byte[size];
             int o = 0;
             WriteU16(buf, ref o, (ushort)_bodies.Count);
-            WriteU16(buf, ref o, manifest ? FlagManifest : (ushort)0);
+            WriteU16(buf, ref o, manifest ? FlagManifest : (sparse ? FlagSparse : (ushort)0));
             if (manifest)
             {
                 for (int i = 0; i < _bodies.Count; i++)
@@ -383,10 +491,14 @@ namespace TcgMultiplayer.Game
                     o += keyBytes[i].Length;
                 }
             }
+            if (sparse) WriteU16(buf, ref o, (ushort)_send.Count);
 
-            int moved = 0;
-            for (int i = 0; i < _bodies.Count; i++)
+            while (_lastSentPos.Count < _bodies.Count) _lastSentPos.Add(Vector3.zero);
+            while (_lastSentOn.Count < _bodies.Count) _lastSentOn.Add(false);
+
+            for (int k = 0; k < _send.Count; k++)
             {
+                int i = _send[k];
                 var rb = _bodies[i];
                 Vector3 lp; Quaternion lr;
                 if (rb == null) { lp = Vector3.zero; lr = Quaternion.identity; }
@@ -395,19 +507,18 @@ namespace TcgMultiplayer.Game
                     lp = inv * (rb.transform.position - origin);
                     lr = inv * rb.transform.rotation;
                 }
-                if (i < _lastSentPos.Count)
-                {
-                    if ((lp - _lastSentPos[i]).sqrMagnitude > 0.001f * 0.001f) moved++;
-                    _lastSentPos[i] = lp;
-                }
-                else _lastSentPos.Add(lp);
+                bool on = rb != null && rb.gameObject.activeInHierarchy;
+                _lastSentPos[i] = lp;
+                _lastSentOn[i] = on;
+
+                if (sparse) WriteU16(buf, ref o, (ushort)i);
 
                 // One flag byte per body. Bit 0: is it switched on over there.
                 // A pusher's collected coins fall out of the tray, get counted,
                 // and are put away — and the watcher was drawing every one of
                 // them wherever the owner's copy happened to be lying, which
                 // was all over the arcade floor.
-                buf[o++] = (byte)(rb != null && rb.gameObject.activeInHierarchy ? 1 : 0);
+                buf[o++] = (byte)(on ? 1 : 0);
                 WriteI16(buf, ref o, Quant(lp.x, PosScale));
                 WriteI16(buf, ref o, Quant(lp.y, PosScale));
                 WriteI16(buf, ref o, Quant(lp.z, PosScale));
@@ -417,18 +528,31 @@ namespace TcgMultiplayer.Game
                 WriteI16(buf, ref o, Quant(lr.w, RotScale));
             }
 
-            BodiesSent += _bodies.Count;
+            // The packet is sized up front and then written; if those two ever
+            // disagree the reader gets garbage and the symptom shows up as
+            // bodies in the wrong place, which is a long way from the cause.
+            // Two machine types' worth of offset arithmetic is not something to
+            // find out about from a screenshot.
+            if (o != buf.Length && _sizeComplaints < 3)
+            {
+                _sizeComplaints++;
+                Plugin.Warn("Physics packet for " + m.Label + " was sized " + buf.Length + " bytes and wrote "
+                            + o + " — " + _send.Count + " of " + _bodies.Count + " bodies"
+                            + (manifest ? ", keyframe" : "") + (sparse ? ", sparse" : "") + ".");
+            }
+
+            BodiesSent += _send.Count;
             LastPacketBytes = buf.Length;
             PacketsSent++;
-            SentBodiesLastPacket = _bodies.Count;
+            SentBodiesLastPacket = _send.Count;
             SentMovedLastPacket = moved;
             if (moved > SentMovedPeak) SentMovedPeak = moved;
             if (now >= _nextSendSummaryAt)
             {
                 _nextSendSummaryAt = now + SummaryEvery;
                 Plugin.Log("Streaming " + m.Label + ": " + moved + " of " + _bodies.Count
-                           + " bodies moved in the last packet (peak " + SentMovedPeak + ", " + PacketsSent
-                           + " packets, " + ManifestsSent + " manifests).");
+                           + " bodies moved, " + _send.Count + " sent in " + buf.Length + " bytes (peak "
+                           + SentMovedPeak + ", " + PacketsSent + " packets, " + ManifestsSent + " manifests).");
             }
             return buf;
         }
@@ -532,7 +656,7 @@ namespace TcgMultiplayer.Game
                     if (_scratch[i] != null && !_byKey.ContainsKey(_scratchKeys[i])) _byKey[_scratchKeys[i]] = _scratch[i];
 
                 w.Aligned.Clear();
-                int matched = 0;
+                int matched = 0, stood = 0;
                 string firstMiss = null;
                 for (int i = 0; i < count; i++)
                 {
@@ -544,7 +668,13 @@ namespace TcgMultiplayer.Game
 
                     Rigidbody rb;
                     if (_byKey.TryGetValue(key, out rb)) { w.Aligned.Add(rb); matched++; }
-                    else { w.Aligned.Add(null); if (firstMiss == null) firstMiss = key; }
+                    else
+                    {
+                        var stand = StandIn(w, m, key);
+                        w.Aligned.Add(stand);
+                        if (stand != null) stood++;
+                        else if (firstMiss == null) firstMiss = key;
+                    }
                 }
                 // The watcher sees the owner's tray and nothing else. A body of
                 // ours the manifest doesn't name — our surplus coins (two saves
@@ -564,21 +694,24 @@ namespace TcgMultiplayer.Game
 
                 w.HaveManifest = true;
                 w.Matched = matched;
-                if (Report != null) Report.Bodies(m.Id, m.Label, _scratch.Count, count, matched);
+                w.Stood = stood;
+                if (Report != null) Report.Bodies(m.Id, m.Label, _scratch.Count, count, matched, stood);
                 w.Unmatched = count - matched;
                 while (w.Targets.Count < count) w.Targets.Add(new Target());
 
                 // Said when the picture changes, not once per packet: two saves
                 // holding different numbers of coins is the steady state, and a
                 // gap that MOVES is the interesting part.
-                string mismatch = _scratch.Count + "/" + count + "/" + matched;
+                string mismatch = _scratch.Count + "/" + count + "/" + matched + "/" + stood;
                 if (mismatch != w.LastMismatch)
                 {
                     w.LastMismatch = mismatch;
                     if (_scratch.Count != count) CountMismatches++;
                     Plugin.Log("Physics: " + m.Label + " has " + _scratch.Count + " moving parts here and " + count
                                + " on the player's screen. Matched " + matched + " by name"
-                               + (count - matched > 0 ? ", " + (count - matched) + " have no counterpart here (e.g. " + firstMiss + ")" : "")
+                               + (stood > 0 ? ", " + stood + " stood in for" : "")
+                               + (count - matched - stood > 0
+                                  ? ", " + (count - matched - stood) + " have no counterpart here (e.g. " + firstMiss + ")" : "")
                                + ".");
                 }
             }
@@ -590,7 +723,23 @@ namespace TcgMultiplayer.Game
                 return;
             }
             if (w.Aligned.Count != count) return;   // manifest and packet disagree; wait for the next keyframe
-            if (data.Length < o + count * 15) return;
+
+            // A sparse packet names the bodies it carries; a keyframe carries
+            // all of them in order, as every packet used to.
+            bool sparse = (flags & FlagSparse) != 0;
+            int poses = count;
+            if (sparse)
+            {
+                if (o + 2 > data.Length) return;
+                poses = ReadU16(data, ref o);
+                if (poses > count) return;
+            }
+            if (data.Length < o + poses * (sparse ? 17 : 15)) return;
+
+            // One slot per body, not per pose, now that poses arrive out of
+            // order. Seeded far away so the first pose for a body always counts
+            // as a change rather than silently matching a zero.
+            while (w.LastPos.Count < count) w.LastPos.Add(new Vector3(-99999f, -99999f, -99999f));
 
             // 0.11.7's question, still asked: of the bodies we place, were they
             // drawing already? Switch on any that weren't (and any parent up to
@@ -629,8 +778,9 @@ namespace TcgMultiplayer.Game
             float now = Time.time;
             int changed = 0, applied = 0;
 
-            for (int i = 0; i < count; i++)
+            for (int k = 0; k < poses; k++)
             {
+                int i = sparse ? ReadU16(data, ref o) : k;
                 bool on = (data[o++] & 1) != 0;
                 var lp = new Vector3(
                     Dequant(ReadI16(data, ref o), PosScale),
@@ -642,12 +792,12 @@ namespace TcgMultiplayer.Game
                     Dequant(ReadI16(data, ref o), RotScale),
                     Dequant(ReadI16(data, ref o), RotScale));
 
-                if (i < w.LastPos.Count)
-                {
-                    if ((lp - w.LastPos[i]).sqrMagnitude > 0.001f * 0.001f) changed++;
-                    w.LastPos[i] = lp;
-                }
-                else w.LastPos.Add(lp);
+                // The bytes are read before this check so a bad index costs one
+                // body, not the rest of the packet.
+                if (i < 0 || i >= count) continue;
+
+                if ((lp - w.LastPos[i]).sqrMagnitude > 0.001f * 0.001f) changed++;
+                w.LastPos[i] = lp;
 
                 var rb = w.Aligned[i];
                 if (rb == null) continue;
@@ -664,15 +814,15 @@ namespace TcgMultiplayer.Game
 
             BodiesApplied += applied;
             PacketsReceived++;
-            RecvPosesLastPacket = count;
+            RecvPosesLastPacket = poses;
             RecvChangedLastPacket = changed;
             if (changed > RecvChangedPeak) RecvChangedPeak = changed;
             if (Report != null) Report.Packet(m.Id, changed);
             if (now >= _nextRecvSummaryAt)
             {
                 _nextRecvSummaryAt = now + SummaryEvery;
-                Plugin.Log("Watching " + m.Label + ": " + changed + " of " + count
-                           + " incoming poses changed in the last packet (peak " + RecvChangedPeak + ", "
+                Plugin.Log("Watching " + m.Label + ": " + poses + " of " + count
+                           + " bodies came in, " + changed + " of them had moved (peak " + RecvChangedPeak + ", "
                            + PacketsReceived + " packets, placing " + applied + ").");
             }
         }
@@ -701,6 +851,93 @@ namespace TcgMultiplayer.Game
         }
 
         /// <summary>Hands the machine back to local physics when we stop spectating it.</summary>
+        /// <summary>
+        /// A machine's round can CREATE bodies. Cuckoo went from 174 bodies to
+        /// 214 while the host played it — forty chips spawned into the playfield
+        /// — and the watcher had none of them, because the watcher's copy of the
+        /// round is muted precisely so it doesn't spawn its own. So the watcher
+        /// stood there seeing the pusher sweep back and forth over an empty
+        /// playfield while the owner saw it shoving forty chips around.
+        ///
+        /// They can't be matched, so they get built: the prefab is found by
+        /// name, cloned, stripped to its renderers and driven like any other
+        /// body. Exactly what loose tickets on the floor already do, which is
+        /// where the prefab lookup comes from.
+        ///
+        /// Only "(Clone)" keys qualify. A key that misses without being a clone
+        /// is a structural difference between the two scenes — the claw's rope
+        /// links were one — and inventing an object for that would be guessing.
+        /// </summary>
+        private Rigidbody StandIn(Watched w, Machine m, string key)
+        {
+            Rigidbody have;
+            if (w.StandIns.TryGetValue(key, out have) && have != null) return have;
+            if (w.StandInGaveUp.Contains(key)) return null;
+
+            int cut = key.LastIndexOf('/');
+            string leaf = cut >= 0 ? key.Substring(cut + 1) : key;
+            int hash = leaf.IndexOf('#');
+            if (hash >= 0) leaf = leaf.Substring(0, hash);
+            if (!leaf.EndsWith("(Clone)", StringComparison.Ordinal)) { w.StandInGaveUp.Add(key); return null; }
+
+            // A cap, because the cost of being wrong about this is a machine
+            // that grows clones forever and a frame rate nobody can explain.
+            if (w.StandIns.Count >= StandInCap)
+            {
+                if (!w.StandInCapSaid)
+                {
+                    w.StandInCapSaid = true;
+                    Plugin.Warn("Not showing any more of " + m.Label + "'s spawned objects — already standing in for "
+                                + StandInCap + ", which is more than a cabinet should ever hold.");
+                }
+                return null;
+            }
+
+            string prefab = leaf.Substring(0, leaf.Length - "(Clone)".Length);
+            var src = LooseItems.FindPrefab(prefab);
+            if (src == null)
+            {
+                w.StandInGaveUp.Add(key);
+                StandInMisses++;
+                if (_standInMissSaid.Add(prefab))
+                    Plugin.Warn("No loaded prefab called \"" + prefab + "\" to stand in for one of "
+                                + m.Label + "'s spawned objects.");
+                return null;
+            }
+
+            GameObject go;
+            try { go = UnityEngine.Object.Instantiate(src); }
+            catch (Exception ex)
+            {
+                w.StandInGaveUp.Add(key);
+                Plugin.Warn("Couldn't clone " + prefab + " for " + m.Label + ": " + ex.Message);
+                return null;
+            }
+
+            go.name = OursPrefix + w.StandIns.Count;
+            go.SetActive(true);
+            AvatarFactory.Strip(go);
+            try { go.transform.SetParent(m.Root, true); } catch { }
+
+            // Strip takes the rigidbody with everything else; it gets one back,
+            // kinematic, because every path downstream of here expects to be
+            // handed a Rigidbody and to place it by hand.
+            var rb = go.AddComponent<Rigidbody>();
+            rb.isKinematic = true;
+            rb.useGravity = false;
+            rb.detectCollisions = false;
+
+            w.StandIns[key] = rb;
+            StandInsBuilt++;
+            if (StandInsBuilt <= 8)
+                Plugin.Log("Standing in for " + m.Label + "'s " + prefab + " — the owner's round spawned it and ours didn't.");
+            return rb;
+        }
+
+        private const int StandInCap = 128;
+        private readonly HashSet<string> _standInMissSaid = new HashSet<string>();
+        public int StandInsBuilt, StandInMisses;
+
         public void ReleaseMachine(uint machineId)
         {
             Watched w;
@@ -730,6 +967,15 @@ namespace TcgMultiplayer.Game
                     rb.WakeUp();
                 }
             }
+
+            // The stand-ins were never part of this machine, so they leave with
+            // the lease rather than being put back.
+            foreach (var kv in w.StandIns)
+            {
+                if (kv.Value == null) continue;
+                try { UnityEngine.Object.Destroy(kv.Value.gameObject); } catch { }
+            }
+            w.StandIns.Clear();
 
             _watched.Remove(machineId);
         }

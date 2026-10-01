@@ -349,7 +349,7 @@ namespace TcgMultiplayer.Game
             return go;
         }
 
-        private static GameObject FindPrefab(string name)
+        internal static GameObject FindPrefab(string name)
         {
             GameObject best = null;
             try

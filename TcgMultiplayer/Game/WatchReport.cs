@@ -25,7 +25,7 @@ namespace TcgMultiplayer.Game
         private sealed class Row
         {
             public string Label;
-            public int LocalBodies, TheirBodies, Matched;
+            public int LocalBodies, TheirBodies, Matched, Stood;
             public int MotionPeak, Packets;
             public int ScreenFields, ScreenApplied;
             public int Muted, LetThrough;
@@ -57,12 +57,13 @@ namespace TcgMultiplayer.Game
             return r;
         }
 
-        public void Bodies(uint id, string label, int local, int theirs, int matched)
+        public void Bodies(uint id, string label, int local, int theirs, int matched, int stood)
         {
             var r = Get(id, label);
             r.LocalBodies = local;
             r.TheirBodies = theirs;
             r.Matched = matched;
+            if (stood > r.Stood) r.Stood = stood;
         }
 
         public void Packet(uint id, int changed)
@@ -89,7 +90,7 @@ namespace TcgMultiplayer.Game
         {
             if (r.Packets == 0) return "never streamed";
             if (r.TheirBodies == 0) return "no moving parts (events only)";
-            if (r.Matched == 0) return "NOTHING MATCHED - nothing of theirs lines up with ours";
+            if (r.Matched == 0 && r.Stood == 0) return "NOTHING MATCHED - nothing of theirs lines up with ours";
             if (r.MotionPeak == 0) return "NOTHING MOVED - parts matched but none of them ever changed";
             if (r.ScreenFields == 0) return "ok, but no screen text found";
             if (r.ScreenApplied == 0) return "ok, but none of the screen text could be written here";
@@ -103,9 +104,11 @@ namespace TcgMultiplayer.Game
             foreach (var kv in _rows)
             {
                 var r = kv.Value;
-                sb.Append("   ").Append((r.Label ?? "?").PadRight(26));
+                sb.Append("   ").Append(r.Label ?? "?").Append('\n');
+                sb.Append("      ");
                 sb.Append(r.Matched).Append('/').Append(r.TheirBodies).Append(" parts matched");
                 sb.Append(" (").Append(r.LocalBodies).Append(" here)");
+                if (r.Stood > 0) sb.Append(", ").Append(r.Stood).Append(" stood in for");
                 sb.Append(", motion peak ").Append(r.MotionPeak);
                 sb.Append(", screen ").Append(r.ScreenApplied).Append('/').Append(r.ScreenFields);
                 if (r.LetThrough > 0) sb.Append(", ").Append(r.LetThrough).Append(" events let through");

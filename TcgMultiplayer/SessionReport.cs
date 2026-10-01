@@ -169,6 +169,10 @@ namespace TcgMultiplayer
                 Line("   physics bodies", m.Physics.BodiesSent + " sent, " + m.Physics.BodiesApplied + " applied");
                 Line("   count mismatches", m.Physics.CountMismatches
                      + (m.Physics.CountMismatches > 0 ? "   <-- the two sides disagreed about a machine" : ""));
+                if (m.Physics.StandInsBuilt > 0 || m.Physics.StandInMisses > 0)
+                    Line("   stood in for", m.Physics.StandInsBuilt + " objects their round spawned and ours didn't"
+                         + (m.Physics.StandInMisses > 0
+                            ? ", " + m.Physics.StandInMisses + " WITH NO PREFAB TO SHOW" : ""));
                 sb.AppendLine();
 
                 // One row per cabinet you watched somebody else play. Only two
@@ -198,7 +202,13 @@ namespace TcgMultiplayer
                 sb.AppendLine("Shared island");
                 Line("   tracked globals", w.TrackedCount);
                 Line("   changes", w.ChangesSent + " sent, " + w.ChangesApplied + " applied");
-                Line("   still visiting?", w.Visiting ? "YES - progression was not put back!" : "no");
+                // Captured deliberately BEFORE the restore runs, so a guest's
+                // report always says yes and used to shout about it — a false
+                // alarm on every guest report ever written. It is only evidence
+                // of a problem in a report that survived a crash.
+                Line("   still visiting?", w.Visiting
+                     ? "yes - your own progression goes back on the moment this report is written"
+                     : "no");
                 sb.AppendLine();
             }
 
