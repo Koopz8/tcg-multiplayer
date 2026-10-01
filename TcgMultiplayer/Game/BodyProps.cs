@@ -43,11 +43,20 @@ namespace TcgMultiplayer.Game
         public const int MaxNames = 250;
 
         public static int Switched, Applied, Skipped;
+        private static bool _toldOnce;
 
         /// <summary>
-        /// Every object with something to draw, by name — minus any name that
-        /// turns up more than once, because then it doesn't identify anything.
-        /// Both ends build this the same way from their own body.
+        /// Every object that draws something, or contains something that draws,
+        /// by name — minus any name that turns up more than once, because then
+        /// it doesn't identify anything. Both ends build this the same way from
+        /// their own body.
+        ///
+        /// It used to require a Renderer on the object itself. That missed a
+        /// prop whose own object is the thing switched on and off while the
+        /// drawing happens on a child called something generic like "MESH" —
+        /// and a name like MESH appears many times, so it was being skipped as
+        /// ambiguous. Hence "0 things switched" while the tickets were plainly
+        /// still there.
         /// </summary>
         private static void Collect(Transform root, Dictionary<string, Transform> into)
         {
@@ -60,7 +69,8 @@ namespace TcgMultiplayer.Game
             for (int i = 0; i < stack.Count; i++)
             {
                 var t = stack[i];
-                if (t == null || t.GetComponent<Renderer>() == null) continue;
+                if (t == null) continue;
+                if (t.GetComponentInChildren<Renderer>(true) == null) continue;
                 var n = t.name;
                 if (string.IsNullOrEmpty(n) || n.Length > 200) continue;
                 if (seenTwice.Contains(n)) continue;
@@ -99,7 +109,17 @@ namespace TcgMultiplayer.Game
                 if (name.Length > 200) { w.Write((byte)0); continue; }
                 w.Write((byte)name.Length);
                 w.Write(name);
-                w.Write((byte)(kv.Value != null && kv.Value.gameObject.activeSelf ? 1 : 0));
+                var t = kv.Value;
+                byte flags = 0;
+                if (t != null && t.gameObject.activeSelf) flags |= 1;
+                // Switching the object off is not the only way the game hides a
+                // thing in your hand; it also just turns the renderer off. The
+                // clone comes from the asset with it on, which is a difference
+                // the object flag alone could never see.
+                var rend = t != null ? t.GetComponent<Renderer>() : null;
+                if (rend == null) flags |= 4;            // nothing to say about a renderer
+                else if (rend.enabled) flags |= 2;
+                w.Write(flags);
             }
             return ms.ToArray();
         }
@@ -113,7 +133,7 @@ namespace TcgMultiplayer.Game
         {
             if (body == null || data == null || data.Length < 1) return 0;
 
-            var want = new Dictionary<string, bool>(64);
+            var want = new Dictionary<string, byte>(64);
             try
             {
                 var r = new System.IO.BinaryReader(new System.IO.MemoryStream(data), Encoding.UTF8);
@@ -123,7 +143,7 @@ namespace TcgMultiplayer.Game
                     int len = r.ReadByte();
                     if (len == 0) continue;
                     var name = Encoding.UTF8.GetString(r.ReadBytes(len));
-                    want[name] = r.ReadByte() != 0;
+                    want[name] = r.ReadByte();
                 }
             }
             catch { return 0; }
@@ -133,14 +153,38 @@ namespace TcgMultiplayer.Game
 
             Applied++;
             int changed = 0;
+            StringBuilder said = _toldOnce ? null : new StringBuilder();
             foreach (var kv in mine)
             {
-                bool on;
-                if (!want.TryGetValue(kv.Key, out on)) { Skipped++; continue; }
+                byte flags;
+                if (!want.TryGetValue(kv.Key, out flags)) { Skipped++; continue; }
                 var t = kv.Value;
-                if (t == null || t.gameObject.activeSelf == on) continue;
-                t.gameObject.SetActive(on);
-                changed++;
+                if (t == null) continue;
+
+                bool wantOn = (flags & 1) != 0;
+                if (t.gameObject.activeSelf != wantOn)
+                {
+                    if (said != null) said.Append(kv.Key).Append(wantOn ? " on" : " off").Append("  ");
+                    t.gameObject.SetActive(wantOn);
+                    changed++;
+                }
+
+                if ((flags & 4) == 0)
+                {
+                    var rend = t.GetComponent<Renderer>();
+                    bool wantDrawn = (flags & 2) != 0;
+                    if (rend != null && rend.enabled != wantDrawn)
+                    {
+                        if (said != null) said.Append(kv.Key).Append(wantDrawn ? " drawn" : " hidden").Append("  ");
+                        rend.enabled = wantDrawn;
+                        changed++;
+                    }
+                }
+            }
+            if (said != null && changed > 0)
+            {
+                _toldOnce = true;
+                Plugin.Log("Put right on their body: " + said);
             }
             Switched += changed;
             return changed;
@@ -176,27 +220,31 @@ namespace TcgMultiplayer.Game
             Plugin.Log("Named things we can both place: " + shared + " of " + mineByName.Count
                        + " here and " + theirsByName.Count + " there. Only those get mirrored.");
 
-            Describe("ours", a);
-            Describe("theirs", b);
+            Describe("ours", mineByName);
+            Describe("theirs", theirsByName);
         }
 
-        private static void Describe(string side, List<Transform> all)
+        /// <summary>
+        /// The exact set the mirroring works from, with what each one is doing.
+        /// Printed in full rather than the first eighty, because the first
+        /// eighty twice failed to reach the thing we were looking for.
+        /// </summary>
+        private static void Describe(string side, Dictionary<string, Transform> named)
         {
             var sb = new StringBuilder();
-            int said = 0;
-            for (int i = 0; i < all.Count && said < 80; i++)
+            foreach (var kv in named)
             {
-                var t = all[i];
+                var t = kv.Value;
                 if (t == null) continue;
+                sb.Append(kv.Key);
+                if (!t.gameObject.activeSelf) sb.Append("(off)");
                 var r = t.GetComponent<Renderer>();
-                if (r == null) continue;
-                said++;
-                sb.Append(t.name)
-                  .Append(t.gameObject.activeSelf ? "" : " (off)")
-                  .Append(r.enabled ? "" : " (renderer off)")
-                  .Append("  ");
+                if (r != null && !r.enabled) sb.Append("(hidden)");
+                sb.Append("  ");
             }
-            Plugin.Log("Things you can see, " + side + ": " + (said == 0 ? "none" : sb.ToString()));
+            Plugin.Log("Body parts we can name, " + side + " (" + named.Count + "): " + sb);
         }
+
+        public static void Forget() { _toldOnce = false; }
     }
 }

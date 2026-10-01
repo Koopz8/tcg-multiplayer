@@ -329,6 +329,7 @@ namespace TcgMultiplayer.Game
             BodyProps.Switched = 0;
             BodyProps.Applied = 0;
             BodyProps.Skipped = 0;
+            BodyProps.Forget();
             _comparedBody = false;
         }
 
