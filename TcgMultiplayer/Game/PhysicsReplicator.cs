@@ -54,8 +54,14 @@ namespace TcgMultiplayer.Game
         /// refreshed inside a second. Without it an unreliable packet carrying
         /// the last pose of something that then stopped would strand it there
         /// until the next keyframe.
+        ///
+        /// Forty, not twenty: the slice became the floor of the bill once the
+        /// still bodies stopped going out. On Cuckoo it was eleven bodies a
+        /// packet, 3.7 of the 4.7 KB/s the machine cost. Sweeping over two
+        /// seconds instead of one halves that, and the only thing it delays is
+        /// repairing a body whose final pose was in a lost packet.
         /// </summary>
-        private const int RefreshSlice = 20;
+        private const int RefreshSlice = 40;
         private const float ManifestKeyframeEvery = 5f;
         private const float SummaryEvery = 5f;
 
@@ -692,6 +698,21 @@ namespace TcgMultiplayer.Game
                     if (rb != null && !w.AlignedSet.Contains(rb)) SetActiveRemembering(w, rb.gameObject, false);
                 }
 
+                // Back-to-back rounds share one lease, and round two can spawn
+                // fewer objects than round one. A stand-in the new manifest
+                // doesn't name is never placed again, so it would just sit where
+                // it was last driven — a chip parked in mid-air that nobody owns.
+                if (w.StandIns.Count > 0)
+                {
+                    foreach (var kv in w.StandIns)
+                    {
+                        var srb = kv.Value;
+                        if (srb == null) continue;
+                        bool wanted = w.AlignedSet.Contains(srb);
+                        if (srb.gameObject.activeSelf != wanted) srb.gameObject.SetActive(wanted);
+                    }
+                }
+
                 w.HaveManifest = true;
                 w.Matched = matched;
                 w.Stood = stood;
@@ -706,7 +727,11 @@ namespace TcgMultiplayer.Game
                 if (mismatch != w.LastMismatch)
                 {
                     w.LastMismatch = mismatch;
-                    if (_scratch.Count != count) CountMismatches++;
+                    // Standing in for a body is an explanation, so it is not a
+                    // mismatch. Counting raw body totals made the alarm fire 48
+                    // times in a session where every single object was accounted
+                    // for, which teaches a tester to ignore the line.
+                    if (count - matched - stood > 0) CountMismatches++;
                     Plugin.Log("Physics: " + m.Label + " has " + _scratch.Count + " moving parts here and " + count
                                + " on the player's screen. Matched " + matched + " by name"
                                + (stood > 0 ? ", " + stood + " stood in for" : "")
@@ -934,7 +959,14 @@ namespace TcgMultiplayer.Game
             return rb;
         }
 
-        private const int StandInCap = 128;
+        /// <summary>
+        /// Cuckoo's round spawns about two hundred chips and coins, and the
+        /// first cap of 128 was reached 1.3 seconds into the round — so seventy
+        /// of them stayed invisible to the watcher, which was the whole thing
+        /// this was built to fix. A hundred and twenty-eight stand-ins cost
+        /// 0.04 ms a frame, so the ceiling is somewhere far above this.
+        /// </summary>
+        private const int StandInCap = 512;
         private readonly HashSet<string> _standInMissSaid = new HashSet<string>();
         public int StandInsBuilt, StandInMisses;
 
