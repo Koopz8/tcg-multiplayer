@@ -516,9 +516,20 @@ namespace TcgMultiplayer.Game
             return go;
         }
 
-        internal static GameObject FindPrefab(string name)
+        internal static GameObject FindPrefab(string name) { return FindPrefab(name, false); }
+
+        /// <summary>
+        /// A loaded prefab asset by name. Cached, hits and misses both: a claw
+        /// cabinet asks for the same few names sixty times in one manifest, and
+        /// each uncached ask walks every object Unity has loaded. allowUi also
+        /// accepts a prefab that draws through a canvas (Stackem Up's board).
+        /// </summary>
+        internal static GameObject FindPrefab(string name, bool allowUi)
         {
-            GameObject best = null;
+            GameObject best;
+            string ck = (allowUi ? "ui:" : "") + name;
+            if (_prefabCache.TryGetValue(ck, out best) && (best != null || Time.time < MissUntil(ck))) return best;
+            best = null;
             try
             {
                 var all = Resources.FindObjectsOfTypeAll<GameObject>();
@@ -528,13 +539,26 @@ namespace TcgMultiplayer.Game
                     if (go == null || go.name != name) continue;
                     if (go.scene.IsValid()) continue;               // a scene instance, not the asset
                     if (go.transform.parent != null) continue;      // a child inside some other prefab
-                    if (go.GetComponentInChildren<Renderer>(true) == null) continue;
+                    if (go.GetComponentInChildren<Renderer>(true) == null && !(allowUi && DrawsOnCanvas(go))) continue;
                     best = go;
                     break;
                 }
             }
             catch { }
+            _prefabCache[ck] = best;
+            if (best == null) _prefabMissUntil[ck] = Time.time + 30f;
             return best;
+        }
+        private static readonly Dictionary<string, GameObject> _prefabCache = new Dictionary<string, GameObject>();
+        private static readonly Dictionary<string, float> _prefabMissUntil = new Dictionary<string, float>();
+        private static float MissUntil(string k) { float t; return _prefabMissUntil.TryGetValue(k, out t) ? t : 0f; }
+
+        internal static bool DrawsOnCanvas(GameObject go)
+        {
+            var comps = go.GetComponentsInChildren<Component>(true);
+            for (int i = 0; i < comps.Length; i++)
+                if (comps[i] != null && comps[i].GetType().Name == "CanvasRenderer") return true;
+            return false;
         }
     }
 }

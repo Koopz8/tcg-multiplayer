@@ -94,6 +94,11 @@ namespace TcgMultiplayer.Game
             public int MoverMisses;
             public readonly Dictionary<Behaviour, bool> FsmWas = new Dictionary<Behaviour, bool>();
             public readonly Dictionary<Component, bool> Sim2DWas = new Dictionary<Component, bool>();
+            public readonly Dictionary<Component, bool> ShownWas = new Dictionary<Component, bool>();
+            public readonly Dictionary<Behaviour, Color> ColorWas = new Dictionary<Behaviour, Color>();
+            /// <summary>Objects we built because the owner's round spawned them and ours didn't.</summary>
+            public readonly List<GameObject> Spawned = new List<GameObject>();
+            public readonly HashSet<string> SpawnGaveUp = new HashSet<string>();
         }
         private sealed class Ease
         {
@@ -427,12 +432,18 @@ namespace TcgMultiplayer.Game
                 var rot = new Quaternion(UnsentMovers.DeQ(r.ReadInt16()), UnsentMovers.DeQ(r.ReadInt16()),
                                          UnsentMovers.DeQ(r.ReadInt16()), UnsentMovers.DeQ(r.ReadInt16()));
                 bool on = (flags & 2) != 0;
+                bool vis = (flags & 4) != 0;
+                bool hasCol = (flags & 8) != 0;
+                Color col = Color.white;
+                if (hasCol) col = new Color(r.ReadByte() / 255f, r.ReadByte() / 255f, r.ReadByte() / 255f, r.ReadByte() / 255f);
 
                 Transform tr;
                 if (key != null)
                 {
                     if (w.AllByKey == null) w.AllByKey = IndexAll(m.Play);
-                    if (!w.AllByKey.TryGetValue(key, out tr) || tr == null)
+                    if ((!w.AllByKey.TryGetValue(key, out tr) || tr == null) && SpawnFor(m, w, key))
+                        w.AllByKey.TryGetValue(key, out tr);
+                    if (tr == null)
                     {
                         w.MoverIds.Remove(id);
                         if (w.MoverMisses++ < 4)
@@ -447,6 +458,8 @@ namespace TcgMultiplayer.Game
                 // so is everything it hangs from. The skee-ball throw arm sits
                 // under a controller that only switches on for a round.
                 if (tr.gameObject.activeSelf != on) SetActiveRemembering(w, tr.gameObject, on);
+                Visual.Show(tr, vis, w.ShownWas);
+                if (hasCol) Visual.SetColor(tr, col, w.ColorWas);
                 if (on)
                 {
                     var a = tr.parent;
@@ -477,6 +490,52 @@ namespace TcgMultiplayer.Game
             }
         }
         public int MoversApplied;
+
+        /// <summary>
+        /// A moving part whose path we haven't got, because the owner's round
+        /// spawned the thing it belongs to — Stackem Up builds a fresh game
+        /// board from a prefab every round. Find the first missing step of the
+        /// path; if it's a "(Clone)", build it from the prefab under the part
+        /// of the path we do have, with every FSM in it switched off, and index
+        /// it. Destroyed on release.
+        /// </summary>
+        private static bool SpawnFor(Machine m, Watched w, string key)
+        {
+            var parts = key.Split('/');
+            string have = "";
+            Transform parent = m.Play;
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string next = have.Length == 0 ? parts[i] : have + "/" + parts[i];
+                Transform t;
+                if (w.AllByKey.TryGetValue(next, out t) && t != null) { have = next; parent = t; continue; }
+
+                string seg = parts[i];
+                int hash = seg.IndexOf('#');
+                string name = hash >= 0 ? seg.Substring(0, hash) : seg;
+                if (!name.EndsWith("(Clone)", StringComparison.Ordinal) || w.SpawnGaveUp.Contains(next)) return false;
+                var src = LooseItems.FindPrefab(name.Substring(0, name.Length - "(Clone)".Length), true);
+                if (src == null)
+                {
+                    w.SpawnGaveUp.Add(next);
+                    Plugin.Log("Can't show " + m.Label + "'s " + name + ": no loaded prefab by that name.");
+                    return false;
+                }
+                GameObject go;
+                try { go = UnityEngine.Object.Instantiate(src, parent, false); }
+                catch (Exception ex) { w.SpawnGaveUp.Add(next); Plugin.Warn("Couldn't build " + name + " for " + m.Label + ": " + ex.Message); return false; }
+                go.name = name;
+                var fsms = go.GetComponentsInChildren<PlayMakerFSM>(true);
+                for (int f = 0; f < fsms.Length; f++) if (fsms[f] != null) fsms[f].enabled = false;
+                w.Spawned.Add(go);
+                MoverSpawns++;
+                Plugin.Log("Built " + m.Label + "'s " + name + " from its prefab - the owner's round made one and ours didn't.");
+                w.AllByKey = IndexAll(m.Play);
+                return true;
+            }
+            return false;
+        }
+        public static int MoverSpawns;
 
         /// <summary>Every transform under the root by the same path the owner names them by.</summary>
         private static Dictionary<string, Transform> IndexAll(Transform root)
@@ -552,6 +611,11 @@ namespace TcgMultiplayer.Game
                 if (kv.Key != null) kv.Key.SetActive(kv.Value);
             Quiet.Restore(w.FsmWas);
             Quiet.Restore2D(w.Sim2DWas);
+            Visual.RestoreShown(w.ShownWas);
+            Visual.RestoreColors(w.ColorWas);
+            for (int i = 0; i < w.Spawned.Count; i++)
+                if (w.Spawned[i] != null) { try { UnityEngine.Object.Destroy(w.Spawned[i]); } catch { } }
+            w.Spawned.Clear();
             foreach (var kv in w.OriginalRot)
                 if (kv.Key != null) kv.Key.localRotation = kv.Value;
             foreach (var kv in w.OriginalPos)

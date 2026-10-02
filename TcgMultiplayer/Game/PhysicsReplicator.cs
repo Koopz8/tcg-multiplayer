@@ -77,6 +77,13 @@ namespace TcgMultiplayer.Game
         /// costs one body's worth of packet instead of two hundred.
         /// </summary>
         private readonly Dictionary<ushort, Vector3> _sentPos = new Dictionary<ushort, Vector3>(1024);
+        /// <summary>
+        /// And the rotation, since 0.16.16. "Moved" used to mean "changed
+        /// position", so a wheel spinning on its axle — Big Bass's wheel, Mega
+        /// Drop's disc, Hockey Hut's table — never counted as moving and only
+        /// went out in the rolling refresh, every two seconds.
+        /// </summary>
+        private readonly Dictionary<ushort, Quaternion> _sentRot = new Dictionary<ushort, Quaternion>(1024);
         private readonly Dictionary<ushort, bool> _sentOn = new Dictionary<ushort, bool>(1024);
         private readonly List<int> _send = new List<int>(128);
 
@@ -375,6 +382,90 @@ namespace TcgMultiplayer.Game
 
         private const string OursPrefix = "TCGMP_Stand_";
 
+        // ------------------------------------------------- spawned nearby
+        /// <summary>
+        /// Things a round spawns that don't land under the cabinet at all.
+        /// Speed Drop's "Drop Ball" creates each ball with no parent, so it
+        /// lives at the top of the scene; walking the cabinet never finds it,
+        /// and the watcher saw a turntable with nothing dropping on it. So the
+        /// owner also sends spawned bodies ("(Clone)") within a few metres of
+        /// the machine, keyed "~near/name#n". The watcher has none of them and
+        /// builds stand-ins as for any spawned body. Ticket piles are loose
+        /// items with their own stream and stay out.
+        /// </summary>
+        private void GatherOwner(Machine m, List<Rigidbody> into, List<string> keys)
+        {
+            Gather(m.Play, into, keys);
+            RefreshNear(m);
+            Dictionary<string, int> seen = keys != null ? new Dictionary<string, int>() : null;
+            for (int i = 0; i < _near.Count; i++)
+            {
+                var rb = _near[i];
+                if (rb == null) continue;
+                into.Add(rb);
+                if (keys != null)
+                {
+                    int n;
+                    seen.TryGetValue(rb.name, out n);
+                    seen[rb.name] = n + 1;
+                    keys.Add(n == 0 ? NearPrefix + rb.name : NearPrefix + rb.name + "#" + n);
+                }
+            }
+        }
+
+        private const string NearPrefix = "~near/";
+        private const float NearRadius = 3f;
+        private readonly List<Rigidbody> _near = new List<Rigidbody>(32);
+        private float _nearAt;
+        private uint _nearMachine;
+        private int _nearLayerTicket = -2;
+        public int NearBodies;
+
+        private void RefreshNear(Machine m)
+        {
+            float now = Time.time;
+            if (m.Id == _nearMachine && now < _nearAt) return;
+            if (m.Id != _nearMachine) _near.Clear();
+            _nearMachine = m.Id;
+            _nearAt = now + 0.5f;
+            if (_nearLayerTicket == -2) _nearLayerTicket = LayerMask.NameToLayer("TICKET");
+
+            var keep = new List<Rigidbody>(_near.Count + 8);
+            try
+            {
+                var all = UnityEngine.Object.FindObjectsOfType<Rigidbody>();
+                var centre = m.Root.position;
+                for (int i = 0; i < all.Length; i++)
+                {
+                    var rb = all[i];
+                    if (rb == null) continue;
+                    var t = rb.transform;
+                    if (!rb.name.EndsWith("(Clone)", StringComparison.Ordinal)) continue;
+                    if (t.IsChildOf(m.Play)) continue;
+                    if (rb.gameObject.layer == _nearLayerTicket) continue;
+                    if ((t.position - centre).sqrMagnitude > NearRadius * NearRadius) continue;
+                    var top = t.root;
+                    if (top != null && top.name == "PLAYER") continue;
+                    keep.Add(rb);
+                }
+            }
+            catch { }
+            // Stable order: ones we already had keep their places, new ones go
+            // on the end, so a ball spawning doesn't renumber the rest.
+            var set = new HashSet<Rigidbody>(keep);
+            var next = new List<Rigidbody>(keep.Count);
+            for (int i = 0; i < _near.Count; i++) if (_near[i] != null && set.Contains(_near[i])) next.Add(_near[i]);
+            var had = new HashSet<Rigidbody>(next);
+            for (int i = 0; i < keep.Count; i++) if (!had.Contains(keep[i])) next.Add(keep[i]);
+            if (next.Count > 0 && _near.Count == 0 && _nearSaid.Add(m.Id))
+                Plugin.Log("Spawned nearby " + m.Label + " and not under it: " + next.Count + " bodies (e.g. " + next[0].name
+                           + " under " + (next[0].transform.parent != null ? next[0].transform.parent.name : "the scene") + ") - sending those too.");
+            _near.Clear();
+            _near.AddRange(next);
+            NearBodies = _near.Count;
+        }
+        private readonly HashSet<uint> _nearSaid = new HashSet<uint>();
+
         /// <summary>
         /// "Machine HANDS-Joystick": the first-person hands a cabinet shows on
         /// the PLAYER's arms. They belong to whoever is at the machine on each
@@ -474,7 +565,7 @@ namespace TcgMultiplayer.Game
                         // something is spawning without end; start the numbering
                         // over rather than wrap around onto live numbers.
                         _keyIds.Clear(); _keyList.Clear(); _recentDefs.Clear();
-                        _sentPos.Clear(); _sentOn.Clear();
+                        _sentPos.Clear(); _sentOn.Clear(); _sentRot.Clear();
                         _keyGen++;
                         keyframe = true;
                         i = -1;
@@ -506,7 +597,7 @@ namespace TcgMultiplayer.Game
                 for (int i = 0; i < _ids.Count; i++) _live.Add(_ids[i]);
                 _dropped.Clear();
                 foreach (var kv in _sentPos) if (!_live.Contains(kv.Key)) _dropped.Add(kv.Key);
-                for (int i = 0; i < _dropped.Count; i++) { _sentPos.Remove(_dropped[i]); _sentOn.Remove(_dropped[i]); }
+                for (int i = 0; i < _dropped.Count; i++) { _sentPos.Remove(_dropped[i]); _sentOn.Remove(_dropped[i]); _sentRot.Remove(_dropped[i]); }
             }
         }
 
@@ -530,7 +621,7 @@ namespace TcgMultiplayer.Game
             // few seconds regardless so a watcher who missed one, or who walked
             // up late, gets a fresh one soon.
             bool newMachine = _lastSentMachine != m.Id;
-            Gather(m.Play, _bodies, null);
+            GatherOwner(m, _bodies, null);
             if (_bodies.Count == 0) return null;
 
             bool changed = newMachine || _bodies.Count != _lastSentBodies.Count;
@@ -548,7 +639,7 @@ namespace TcgMultiplayer.Game
             if (keyframe) _nextKeyframeAt = now + ManifestKeyframeEvery;
             if (manifest)
             {
-                Gather(m.Play, _bodies, _keys);
+                GatherOwner(m, _bodies, _keys);
                 _lastSentBodies.Clear();
                 _lastSentBodies.AddRange(_bodies);
                 ManifestsSent++;
@@ -558,6 +649,7 @@ namespace TcgMultiplayer.Game
             {
                 _sentPos.Clear();
                 _sentOn.Clear();
+                _sentRot.Clear();
                 _refreshCursor = 0;
                 _lastSentMachine = m.Id;
                 _keyIds.Clear();
@@ -568,7 +660,7 @@ namespace TcgMultiplayer.Game
                 _nextKeyframeAt = 0f;   // and get a full set straight away
                 keyframe = true;
                 manifest = true;
-                if (_keys.Count != _bodies.Count) Gather(m.Play, _bodies, _keys);
+                if (_keys.Count != _bodies.Count) GatherOwner(m, _bodies, _keys);
                 if (_describedOwner.Add(m.Id)) DescribeRoot(m, _bodies, "Owner");
             }
 
@@ -603,7 +695,7 @@ namespace TcgMultiplayer.Game
             // This is what a keyframe is for. Every five seconds costs about a
             // kilobyte a second on the heaviest cabinet in the arcade, and in
             // exchange anything stranded for any reason fixes itself.
-            if (keyframe) { _sentPos.Clear(); _sentOn.Clear(); }
+            if (keyframe) { _sentPos.Clear(); _sentOn.Clear(); _sentRot.Clear(); }
 
             int moved = 0;
             _send.Clear();
@@ -624,9 +716,12 @@ namespace TcgMultiplayer.Game
                 Vector3 was;
                 bool wasOn;
                 bool known = _sentPos.TryGetValue(id, out was) && _sentOn.TryGetValue(id, out wasOn);
+                Quaternion wasRot;
                 bool isMoved = !known
                                || (lp - was).sqrMagnitude > 0.001f * 0.001f
-                               || _sentOn[id] != on;
+                               || _sentOn[id] != on
+                               || (rb != null && _sentRot.TryGetValue(id, out wasRot)
+                                   && Quaternion.Angle(wasRot, inv * rb.transform.rotation) > 0.5f);
                 if (isMoved && known) moved++;
 
                 if (isMoved || (i >= sliceFrom && i < sliceTo)) _send.Add(i);
@@ -702,6 +797,7 @@ namespace TcgMultiplayer.Game
                 }
                 bool on = rb != null && rb.gameObject.activeInHierarchy;
                 _sentPos[_ids[i]] = lp;
+                _sentRot[_ids[i]] = lr;
                 _sentOn[_ids[i]] = on;
 
                 if (sparse) WriteU16(buf, ref o, (ushort)i);
@@ -885,8 +981,22 @@ namespace TcgMultiplayer.Game
                     w.KeyNames[defId] = Encoding.UTF8.GetString(full);
                 }
 
+                // Every key this manifest names, so the by-name fallback never
+                // takes a body that a later key wants by its exact path.
+                int keysAt = o;
+                _ownerKeys = new HashSet<string>();
+                for (int i = 0; i < count && keysAt + 2 <= data.Length; i++)
+                {
+                    int kid = data[keysAt] | (data[keysAt + 1] << 8);
+                    keysAt += 2;
+                    string kname;
+                    if (w.KeyNames.TryGetValue((ushort)kid, out kname)) _ownerKeys.Add(kname);
+                }
+
                 w.Aligned.Clear();
-                int matched = 0, stood = 0;
+                int matched = 0, stood = 0, byName = 0;
+                _claimed.Clear();
+                _leafPool = null;
                 string firstMiss = null;
                 for (int i = 0; i < count; i++)
                 {
@@ -915,7 +1025,15 @@ namespace TcgMultiplayer.Game
                     }
 
                     Rigidbody rb;
-                    if (_byKey.TryGetValue(key, out rb)) { w.Aligned.Add(rb); matched++; }
+                    if (_byKey.TryGetValue(key, out rb)) { w.Aligned.Add(rb); matched++; _claimed.Add(rb); }
+                    else if ((rb = ByLeafName(key)) != null)
+                    {
+                        // Same object, different parent. Hockey Hut's pucks
+                        // start under the table and are moved to PUCKS/ as
+                        // they're shot; by path, all 43 missed. Interchangeable
+                        // pucks matched by name look exactly the same.
+                        w.Aligned.Add(rb); matched++; byName++;
+                    }
                     else
                     {
                         var stand = StandIn(w, m, key);
@@ -987,6 +1105,7 @@ namespace TcgMultiplayer.Game
                     if (count - matched - stood > 0) CountMismatches++;
                     Plugin.Log("Physics: " + m.Label + " has " + _scratch.Count + " moving parts here and " + count
                                + " on the player's screen. Matched " + matched + " by name"
+                               + (byName > 0 ? " (" + byName + " of them somewhere else in the cabinet)" : "")
                                + (stood > 0 ? ", " + stood + " stood in for" : "")
                                + (count - matched - stood > 0
                                   ? ", " + (count - matched - stood) + " have no counterpart here (e.g. " + firstMiss + ")" : "")
@@ -1390,6 +1509,61 @@ namespace TcgMultiplayer.Game
         /// is a structural difference between the two scenes — the claw's rope
         /// links were one — and inventing an object for that would be guessing.
         /// </summary>
+        private readonly HashSet<Rigidbody> _claimed = new HashSet<Rigidbody>();
+        private Dictionary<string, List<Rigidbody>> _leafPool;
+
+        private static string LeafOf(string key)
+        {
+            int cut = key.LastIndexOf('/');
+            string leaf = cut >= 0 ? key.Substring(cut + 1) : key;
+            int hash = leaf.IndexOf('#');
+            return hash >= 0 ? leaf.Substring(0, hash) : leaf;
+        }
+
+        /// <summary>
+        /// An unclaimed body of ours with the same name, anywhere in the
+        /// cabinet. Only bodies that no key claimed outright are offered, and
+        /// each once per manifest, in walk order.
+        /// </summary>
+        private Rigidbody ByLeafName(string key)
+        {
+            if (_leafPool == null)
+            {
+                // Built after every exact match has been tried would be ideal;
+                // building it lazily on the first miss and skipping anything an
+                // exact key has claimed so far is close enough, and the claimed
+                // set is checked again on the way out.
+                _leafPool = new Dictionary<string, List<Rigidbody>>();
+                for (int i = 0; i < _scratch.Count; i++)
+                {
+                    var rb = _scratch[i];
+                    if (rb == null) continue;
+                    List<Rigidbody> l;
+                    if (!_leafPool.TryGetValue(rb.name, out l)) { l = new List<Rigidbody>(); _leafPool[rb.name] = l; }
+                    l.Add(rb);
+                }
+            }
+            List<Rigidbody> pool;
+            if (!_leafPool.TryGetValue(LeafOf(key), out pool)) return null;
+            for (int i = 0; i < pool.Count; i++)
+            {
+                var rb = pool[i];
+                if (rb == null || _claimed.Contains(rb)) continue;
+                // A body some later key names exactly is not ours to take.
+                string itsKey = KeyOfLocal(rb);
+                if (itsKey != null && _ownerKeys != null && _ownerKeys.Contains(itsKey)) continue;
+                _claimed.Add(rb);
+                return rb;
+            }
+            return null;
+        }
+        private HashSet<string> _ownerKeys;
+        private string KeyOfLocal(Rigidbody rb)
+        {
+            for (int i = 0; i < _scratch.Count; i++) if (ReferenceEquals(_scratch[i], rb)) return i < _scratchKeys.Count ? _scratchKeys[i] : null;
+            return null;
+        }
+
         private Rigidbody StandIn(Watched w, Machine m, string key)
         {
             Rigidbody have;
@@ -1400,7 +1574,7 @@ namespace TcgMultiplayer.Game
             string leaf = cut >= 0 ? key.Substring(cut + 1) : key;
             int hash = leaf.IndexOf('#');
             if (hash >= 0) leaf = leaf.Substring(0, hash);
-            if (!leaf.EndsWith("(Clone)", StringComparison.Ordinal)) { w.StandInGaveUp.Add(key); return null; }
+            bool clone = leaf.EndsWith("(Clone)", StringComparison.Ordinal);
 
             // A cap, because the cost of being wrong about this is a machine
             // that grows clones forever and a frame rate nobody can explain.
@@ -1415,8 +1589,14 @@ namespace TcgMultiplayer.Game
                 return null;
             }
 
-            string prefab = leaf.Substring(0, leaf.Length - "(Clone)".Length);
+            string prefab = clone ? leaf.Substring(0, leaf.Length - "(Clone)".Length) : leaf;
             var src = LooseItems.FindPrefab(prefab);
+            // Not a clone and no prefab by that name: a structural difference
+            // (the claw's rope links), not something a round made. Inventing
+            // one would be guessing. The claw's prizes ARE spawned, but renamed
+            // to T100 / B050 — so a non-clone name gets the prefab lookup too,
+            // and only gives up quietly when there's nothing to find.
+            if (src == null && !clone) { w.StandInGaveUp.Add(key); return null; }
             if (src == null)
             {
                 w.StandInGaveUp.Add(key);

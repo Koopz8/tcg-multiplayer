@@ -556,6 +556,8 @@ namespace TcgMultiplayer.Game
 
         private void Grant(Machine m, ulong owner, string ownerName)
         {
+            if (m.Owner != 0 && owner == 0)
+                _releasedBy[m.Id] = new KeyValuePair<ulong, float>(m.Owner, Time.time);
             m.Owner = owner;
             m.OwnerName = ownerName;
             m.OwnedByMe = owner != 0 && owner == _session.SelfId.m_SteamID;
@@ -1533,8 +1535,32 @@ namespace TcgMultiplayer.Game
 
         private void OnMirroredEvent(CSteamID from, uint machineId, uint fsmId, string evt)
         {
+            // The tail of someone's round, arriving after they handed the
+            // machine back. The lease ends on the machine going still, and the
+            // cabinet's own wind-down — skee ball's Game Over, Eject Card — is
+            // still being narrated a moment later. Nothing is muting it any
+            // more by then, so it ran on the watcher's copy: it switched on the
+            // machine's first-person hands and locked the watcher's arm aiming
+            // down the lane the instant the other player's game ended.
+            KeyValuePair<ulong, float> rel;
+            if (_releasedBy.TryGetValue(machineId, out rel) && rel.Key == from.m_SteamID
+                && Time.time - rel.Value < StragglerWindow)
+            {
+                Machine mm;
+                if (_registry.TryGet(machineId, out mm) && mm.Owner == 0)
+                {
+                    StragglerEvents++;
+                    if (_stragglerSaid.Add(machineId))
+                        Plugin.Log("Dropped the tail of " + mm.Label + "'s last round (" + evt + "): it arrived after the machine was handed back.");
+                    return;
+                }
+            }
             ApplyMirrored(machineId, fsmId, evt);
         }
+        private readonly Dictionary<uint, KeyValuePair<ulong, float>> _releasedBy = new Dictionary<uint, KeyValuePair<ulong, float>>();
+        private readonly HashSet<uint> _stragglerSaid = new HashSet<uint>();
+        private const float StragglerWindow = 8f;
+        public int StragglerEvents;
 
         private void ApplyMirrored(uint machineId, uint fsmId, string evt)
         {

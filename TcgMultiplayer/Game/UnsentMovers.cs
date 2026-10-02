@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using UnityEngine;
 
 namespace TcgMultiplayer.Game
@@ -19,6 +20,121 @@ namespace TcgMultiplayer.Game
     /// number plus a pose; the path goes once per keyframe. Local poses, so a
     /// part moved only by its parent costs nothing.
     /// </summary>
+    /// <summary>
+    /// What a part looks like beyond where it is: whether its renderer or UI
+    /// graphic is switched on, and a UI graphic's colour. Stackem Up's board is
+    /// a canvas of images lit and unlit by the game; none of them move.
+    /// Reached by name and reflection — the UI module isn't referenced.
+    /// </summary>
+    internal static class Visual
+    {
+        private static readonly Dictionary<Type, PropertyInfo> _color = new Dictionary<Type, PropertyInfo>();
+
+        public static bool HasCanvas(Transform t)
+        {
+            var cs = t.GetComponents<Component>();
+            for (int i = 0; i < cs.Length; i++) if (cs[i] != null && cs[i].GetType().Name == "CanvasRenderer") return true;
+            return false;
+        }
+
+        /// <summary>The UI graphic on this object, if any (Image, RawImage, Text, TextMeshProUGUI).</summary>
+        public static Behaviour Graphic(Transform t)
+        {
+            var bs = t.GetComponents<Behaviour>();
+            for (int i = 0; i < bs.Length; i++)
+            {
+                var b = bs[i];
+                if (b == null) continue;
+                var n = b.GetType().Name;
+                if (n == "Image" || n == "RawImage" || n == "Text" || n == "TextMeshProUGUI") return b;
+            }
+            return null;
+        }
+
+        public static bool Shown(Transform t)
+        {
+            var r = t.GetComponent<Renderer>();
+            if (r != null && !r.enabled) return false;
+            var g = Graphic(t);
+            if (g != null && !g.enabled) return false;
+            return true;
+        }
+
+        public static void Show(Transform t, bool on, Dictionary<Component, bool> was)
+        {
+            var r = t.GetComponent<Renderer>();
+            if (r != null && r.enabled != on) { if (!was.ContainsKey(r)) was[r] = r.enabled; r.enabled = on; }
+            var g = Graphic(t);
+            if (g != null && g.enabled != on) { if (!was.ContainsKey(g)) was[g] = g.enabled; g.enabled = on; }
+        }
+
+        public static void RestoreShown(Dictionary<Component, bool> was)
+        {
+            foreach (var kv in was)
+            {
+                var r = kv.Key as Renderer;
+                if (r != null) { r.enabled = kv.Value; continue; }
+                var b = kv.Key as Behaviour;
+                if (b != null) b.enabled = kv.Value;
+            }
+            was.Clear();
+        }
+
+        private static PropertyInfo ColorProp(Behaviour g)
+        {
+            PropertyInfo p;
+            var ty = g.GetType();
+            if (!_color.TryGetValue(ty, out p))
+            {
+                p = ty.GetProperty("color", BindingFlags.Public | BindingFlags.Instance);
+                if (p != null && p.PropertyType != typeof(Color)) p = null;
+                _color[ty] = p;
+            }
+            return p;
+        }
+
+        public static bool TryColor(Transform t, out Color c)
+        {
+            c = Color.white;
+            var g = Graphic(t);
+            if (g == null) return false;
+            var p = ColorProp(g);
+            if (p == null) return false;
+            try { c = (Color)p.GetValue(g, null); return true; } catch { return false; }
+        }
+
+        public static void SetColor(Transform t, Color c, Dictionary<Behaviour, Color> was)
+        {
+            var g = Graphic(t);
+            if (g == null) return;
+            var p = ColorProp(g);
+            if (p == null) return;
+            try
+            {
+                if (!was.ContainsKey(g)) was[g] = (Color)p.GetValue(g, null);
+                p.SetValue(g, c, null);
+            }
+            catch { }
+        }
+
+        public static void RestoreColors(Dictionary<Behaviour, Color> was)
+        {
+            foreach (var kv in was)
+            {
+                if (kv.Key == null) continue;
+                var p = ColorProp(kv.Key);
+                if (p != null) { try { p.SetValue(kv.Key, kv.Value, null); } catch { } }
+            }
+            was.Clear();
+        }
+
+        public static bool Same(Color a, Color b)
+        {
+            return Mathf.Abs(a.r - b.r) < 0.004f && Mathf.Abs(a.g - b.g) < 0.004f
+                && Mathf.Abs(a.b - b.b) < 0.004f && Mathf.Abs(a.a - b.a) < 0.004f;
+        }
+    }
+
     internal sealed class UnsentMovers
     {
         private sealed class Part
@@ -30,6 +146,9 @@ namespace TcgMultiplayer.Game
             public int Moves;
             public bool Live;
             public bool On;
+            public bool Vis, SentVis;
+            public Color Col, SentCol;
+            public bool HasCol;
             public ushort Id;
             public bool Defined;
             public Vector3 SentPos;
@@ -70,8 +189,14 @@ namespace TcgMultiplayer.Game
                 var lp = p.T.localPosition;
                 var lr = p.T.localRotation;
                 bool on = p.T.gameObject.activeSelf;
-                if ((lp - p.Pos).sqrMagnitude > 0.001f * 0.001f || Quaternion.Angle(lr, p.Rot) > 0.5f || on != p.On)
+                bool vis = Visual.Shown(p.T);
+                Color col = p.Col;
+                bool colChanged = p.HasCol && Visual.TryColor(p.T, out col) && !Visual.Same(col, p.Col);
+                if ((lp - p.Pos).sqrMagnitude > 0.001f * 0.001f || Quaternion.Angle(lr, p.Rot) > 0.5f || on != p.On
+                    || vis != p.Vis || colChanged)
                 {
+                    p.Vis = vis;
+                    p.Col = col;
                     p.Pos = lp;
                     p.Rot = lr;
                     p.On = on;
@@ -106,7 +231,7 @@ namespace TcgMultiplayer.Game
             if (t.GetComponent<Rigidbody>() != null) return false;     // streamed, with everything on it
             if (PhysicsReplicator.IsPlayersHands(t.name) || t.name.IndexOf("PlayersClubCard", StringComparison.OrdinalIgnoreCase) >= 0
                 || t.name.StartsWith("TCGMP_", StringComparison.Ordinal)) return false;
-            bool draws = t.GetComponent<Renderer>() != null;
+            bool draws = t.GetComponent<Renderer>() != null || Visual.HasCanvas(t);
             Dictionary<string, int> seen = t.childCount > 1 ? new Dictionary<string, int>(t.childCount) : null;
             for (int c = 0; c < t.childCount; c++)
             {
@@ -117,7 +242,12 @@ namespace TcgMultiplayer.Game
                 if (Walk(ch, root, ck, sentByScreen)) draws = true;
             }
             if (draws && t != root && _parts.Count < MaxParts && (sentByScreen == null || !sentByScreen(t)) && _known.Add(t))
-                _parts.Add(new Part { T = t, Key = key, Pos = t.localPosition, Rot = t.localRotation, On = t.gameObject.activeSelf });
+            {
+                var np = new Part { T = t, Key = key, Pos = t.localPosition, Rot = t.localRotation, On = t.gameObject.activeSelf };
+                np.Vis = Visual.Shown(t);
+                np.HasCol = Visual.TryColor(t, out np.Col);
+                _parts.Add(np);
+            }
             return draws;
         }
 
@@ -136,7 +266,8 @@ namespace TcgMultiplayer.Game
                 if (keyframe || !p.Defined
                     || (p.T.localPosition - p.SentPos).sqrMagnitude > 0.0005f * 0.0005f
                     || Quaternion.Angle(p.T.localRotation, p.SentRot) > 0.2f
-                    || p.T.gameObject.activeSelf != p.SentOn)
+                    || p.T.gameObject.activeSelf != p.SentOn
+                    || p.Vis != p.SentVis || (p.HasCol && !Visual.Same(p.Col, p.SentCol)))
                     _send.Add(p);
             }
             w.Write((ushort)_send.Count);
@@ -148,12 +279,21 @@ namespace TcgMultiplayer.Game
                 p.SentPos = p.T.localPosition;
                 p.SentRot = p.T.localRotation;
                 p.SentOn = p.T.gameObject.activeSelf;
+                p.SentVis = p.Vis;
+                p.SentCol = p.Col;
                 w.Write(p.Id);
-                w.Write((byte)((define ? 1 : 0) | (p.T.gameObject.activeSelf ? 2 : 0)));
+                w.Write((byte)((define ? 1 : 0) | (p.T.gameObject.activeSelf ? 2 : 0) | (p.Vis ? 4 : 0) | (p.HasCol ? 8 : 0)));
                 if (define) WriteStr(w, p.Key);
                 w.Write(p.SentPos.x); w.Write(p.SentPos.y); w.Write(p.SentPos.z);
                 var q = p.SentRot;
                 w.Write(Q(q.x)); w.Write(Q(q.y)); w.Write(Q(q.z)); w.Write(Q(q.w));
+                if (p.HasCol)
+                {
+                    w.Write((byte)Mathf.RoundToInt(Mathf.Clamp01(p.Col.r) * 255f));
+                    w.Write((byte)Mathf.RoundToInt(Mathf.Clamp01(p.Col.g) * 255f));
+                    w.Write((byte)Mathf.RoundToInt(Mathf.Clamp01(p.Col.b) * 255f));
+                    w.Write((byte)Mathf.RoundToInt(Mathf.Clamp01(p.Col.a) * 255f));
+                }
             }
             Sent += _send.Count;
             return _send.Count;
