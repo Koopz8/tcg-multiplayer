@@ -9,8 +9,8 @@ unofficial fan mod, nothing to do with devotid. everyone needs their own copy of
 [size=4][b]what it does[/b][/size]
 [list]
 [*]host makes a friends-only steam lobby, friends join from the friends list. no servers, no port forwarding.
-[*]you see each other properly, walking animations and all.
-[*]machines have an owner. if someone's on a cabinet it won't take your card, but you can stand there and watch them play it - the coins, the claw and their score on the cabinet screen, live.
+[*]you see each other properly, as the character they picked, walking animations and all, holding whatever they're holding.
+[*]machines have an owner. if someone's on a cabinet it won't take your card, but you can stand there and watch them play it - the coins, the claw, the arms and wheels and their score on the cabinet screen, live.
 [*]tickets and prizes a friend wins show up on the floor for everyone. only they can pick them up.
 [*]everyone keeps their own money, tickets, prizes and inventory. watching a friend win doesn't pay you.
 [*]unlocks, doors and vehicles are shared while you play together.
@@ -48,7 +48,8 @@ F9 panel · F7 ride along · F8 move game to next monitor · F10 self check · F
 [list]
 [*]no host migration. host leaves, session ends (cleanly, nobody loses anything).
 [*]npcs aren't synced.
-[*]you see other players as your own character for now (if you're mandy and they're larry, they look like mandy to you). next on the list.
+[*]watching stackem up and speed drop's dropping balls doesn't work yet. every other machine in larry's arcade does.
+[*]the carnival games outside haven't been checked with two people yet.
 [*]a coin game update will probably break it until I update.
 [*]no voice chat, use discord.
 [*]beta. weird corners of the game haven't been tried with two people. tell me what you find.

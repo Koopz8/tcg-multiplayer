@@ -1,6 +1,29 @@
 CHANGELOG
 =========
 
+0.16.17 (beta)
+--------------
+* Watching someone play is actually live now, both ways. Before this the
+  machine would quietly hand itself back a few seconds into the round and
+  the person watching just saw a dead cabinet.
+* Went through the whole arcade. Treasure, the pushers, Cuckoo, Big Bass,
+  Mega Drop, Hockey Hut, Skee Ball, Dizzy Bird, both claws and Prizemaster
+  all show what the other player is doing now. Claw arms, the key game arm,
+  spinning wheels, Speed Drop's turntable, Cuckoo's clock arms and the
+  ticket conveyor all move on your screen too.
+* Fixed coins and chests popping apart every few seconds while you watch.
+* Fixed a frozen copy of your own last round sitting under the other
+  player's coins.
+* Moving parts are a lot smoother on the watching side.
+* Other players show up as the character they actually picked, and you can
+  see what they're holding.
+* Fixed skee ball locking the watcher's arm out toward the machine.
+* Known issues: Stackem Up and Speed Drop's dropping balls don't show for
+  the person watching yet. The carnival games outside haven't been checked.
+* This is a beta. The log lines are left in on purpose - if something looks
+  wrong, send me your MelonLoader log and the report from the
+  TcgMultiplayer_Reports folder.
+
 0.12.3
 ------
 * Watching a friend play a cabinet actually works now. On coin pushers and
