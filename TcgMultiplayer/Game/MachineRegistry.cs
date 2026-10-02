@@ -15,6 +15,17 @@ namespace TcgMultiplayer.Game
         public string Path;             // for logs and the overlay
         public string Label;            // short, human-readable
         public Transform Root;
+        /// <summary>
+        /// The whole cabinet, when the card reader's object is only part of
+        /// it. Hockey Hut's pucks and table, the skee-ball lane's neighbours,
+        /// sit beside Machine_HockeyHut under "Hockey Hut 06", not inside it —
+        /// so they were never streamed and the watcher saw a dead cabinet.
+        /// Null when the parent holds other machines too (Cuckoo, Dunko, the
+        /// pusher row, the vending wall) or is part of something that moves.
+        /// </summary>
+        public Transform PlayRoot;
+        /// <summary>What gets walked for bodies, text and moving parts.</summary>
+        public Transform Play { get { return IsMover || PlayRoot == null ? Root : PlayRoot; } }
         public PlayMakerFSM Controller; // the "Coin Machine Canvas CNTLR"
 
         /// <summary>Every FSM under this machine, by NetId. The mirror addresses these.</summary>
@@ -139,6 +150,27 @@ namespace TcgMultiplayer.Game
     internal sealed class MachineRegistry
     {
         public const string ControllerFsmName = "Coin Machine Canvas CNTLR";
+
+        /// <summary>See Machine.PlayRoot.</summary>
+        private static Transform CabinetOf(Transform root)
+        {
+            try
+            {
+                var p = root != null ? root.parent : null;
+                if (p == null || p.parent == null) return null;           // a scene root holds everything
+                if (p.GetComponentInParent<Rigidbody>() != null) return null;   // part of something that moves
+                int readers = 0;
+                var fsms = p.GetComponentsInChildren<PlayMakerFSM>(true);
+                for (int i = 0; i < fsms.Length; i++)
+                {
+                    string n = null;
+                    try { n = fsms[i].FsmName; } catch { }
+                    if (n == ControllerFsmName && ++readers > 1) return null;   // shared with other machines
+                }
+                return readers == 1 ? p : null;
+            }
+            catch { return null; }
+        }
 
         private readonly Dictionary<uint, Machine> _byId = new Dictionary<uint, Machine>();
         private readonly Dictionary<int, Machine> _byFsmInstance = new Dictionary<int, Machine>();
@@ -275,6 +307,7 @@ namespace TcgMultiplayer.Game
                     Label = ShortLabel(path),
                     Root = root,
                     Controller = fsm,
+                    PlayRoot = CabinetOf(root),
                     SupportsFreeze = HasFrozenState(fsm),
                 };
                 // Put back what we already knew about this one.

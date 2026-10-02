@@ -29,10 +29,12 @@ namespace TcgMultiplayer.Game
             public Quaternion Rot;
             public int Moves;
             public bool Live;
+            public bool On;
             public ushort Id;
             public bool Defined;
             public Vector3 SentPos;
             public Quaternion SentRot;
+            public bool SentOn;
         }
 
         private const int MaxParts = 3000;
@@ -43,12 +45,23 @@ namespace TcgMultiplayer.Game
         private uint _machine;
         private string _label;
         private Transform _root;
+        private readonly HashSet<Transform> _known = new HashSet<Transform>();
+        private float _rescanAt;
+        private Func<Transform, bool> _sentByScreen;
+        /// <summary>A round spawns things (Speed Drop's balls); walk again now and then to pick them up.</summary>
+        private const float RescanEvery = 2f;
 
         /// <summary>Called on the screen mirror's clock while we own a machine.</summary>
         public void Sample(Machine m, Func<Transform, bool> sentByScreen)
         {
             if (m == null || m.Root == null) return;
             if (m.Id != _machine) { End(); Begin(m, sentByScreen); }
+            _sentByScreen = sentByScreen;
+            if (Time.time >= _rescanAt)
+            {
+                _rescanAt = Time.time + RescanEvery;
+                Walk(_root, _root, "", sentByScreen);
+            }
 
             for (int i = 0; i < _parts.Count; i++)
             {
@@ -56,10 +69,12 @@ namespace TcgMultiplayer.Game
                 if (p.T == null) continue;
                 var lp = p.T.localPosition;
                 var lr = p.T.localRotation;
-                if ((lp - p.Pos).sqrMagnitude > 0.001f * 0.001f || Quaternion.Angle(lr, p.Rot) > 0.5f)
+                bool on = p.T.gameObject.activeSelf;
+                if ((lp - p.Pos).sqrMagnitude > 0.001f * 0.001f || Quaternion.Angle(lr, p.Rot) > 0.5f || on != p.On)
                 {
                     p.Pos = lp;
                     p.Rot = lr;
+                    p.On = on;
                     // A part that has left the machine (the player's own club
                     // card goes back to their hand) is not the machine's.
                     if (!p.T.IsChildOf(_root)) continue;
@@ -80,13 +95,17 @@ namespace TcgMultiplayer.Game
             _live.Clear();
             _machine = m.Id;
             _label = m.Label;
-            _root = m.Root;
-            Walk(m.Root, m.Root, "", sentByScreen);
+            _root = m.Play;
+            _known.Clear();
+            Walk(_root, _root, "", sentByScreen);
+            _rescanAt = Time.time + RescanEvery;
         }
 
         private bool Walk(Transform t, Transform root, string key, Func<Transform, bool> sentByScreen)
         {
             if (t.GetComponent<Rigidbody>() != null) return false;     // streamed, with everything on it
+            if (PhysicsReplicator.IsPlayersHands(t.name) || t.name.IndexOf("PlayersClubCard", StringComparison.OrdinalIgnoreCase) >= 0
+                || t.name.StartsWith("TCGMP_", StringComparison.Ordinal)) return false;
             bool draws = t.GetComponent<Renderer>() != null;
             Dictionary<string, int> seen = t.childCount > 1 ? new Dictionary<string, int>(t.childCount) : null;
             for (int c = 0; c < t.childCount; c++)
@@ -97,8 +116,8 @@ namespace TcgMultiplayer.Game
                 string ck = (key.Length == 0 ? "" : key + "/") + (n == 0 ? ch.name : ch.name + "#" + n);
                 if (Walk(ch, root, ck, sentByScreen)) draws = true;
             }
-            if (draws && t != root && _parts.Count < MaxParts && (sentByScreen == null || !sentByScreen(t)))
-                _parts.Add(new Part { T = t, Key = key, Pos = t.localPosition, Rot = t.localRotation });
+            if (draws && t != root && _parts.Count < MaxParts && (sentByScreen == null || !sentByScreen(t)) && _known.Add(t))
+                _parts.Add(new Part { T = t, Key = key, Pos = t.localPosition, Rot = t.localRotation, On = t.gameObject.activeSelf });
             return draws;
         }
 
@@ -116,7 +135,8 @@ namespace TcgMultiplayer.Game
                 if (p.T == null || !p.T.IsChildOf(_root)) continue;
                 if (keyframe || !p.Defined
                     || (p.T.localPosition - p.SentPos).sqrMagnitude > 0.0005f * 0.0005f
-                    || Quaternion.Angle(p.T.localRotation, p.SentRot) > 0.2f)
+                    || Quaternion.Angle(p.T.localRotation, p.SentRot) > 0.2f
+                    || p.T.gameObject.activeSelf != p.SentOn)
                     _send.Add(p);
             }
             w.Write((ushort)_send.Count);
@@ -127,6 +147,7 @@ namespace TcgMultiplayer.Game
                 p.Defined = true;
                 p.SentPos = p.T.localPosition;
                 p.SentRot = p.T.localRotation;
+                p.SentOn = p.T.gameObject.activeSelf;
                 w.Write(p.Id);
                 w.Write((byte)((define ? 1 : 0) | (p.T.gameObject.activeSelf ? 2 : 0)));
                 if (define) WriteStr(w, p.Key);
@@ -176,6 +197,7 @@ namespace TcgMultiplayer.Game
             Count += _live.Count;
             _parts.Clear();
             _live.Clear();
+            _known.Clear();
             _machine = 0;
         }
 

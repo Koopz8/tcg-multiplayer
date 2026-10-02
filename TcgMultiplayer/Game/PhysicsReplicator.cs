@@ -135,6 +135,8 @@ namespace TcgMultiplayer.Game
             public readonly List<Vector3> LastPos = new List<Vector3>(128);
             /// <summary>Every object whose active flag we changed, with what it was. Restored on release.</summary>
             public readonly Dictionary<GameObject, bool> Originals = new Dictionary<GameObject, bool>();
+            /// <summary>FSMs silenced under anything we switched on; see Quiet.</summary>
+            public readonly Dictionary<Behaviour, bool> FsmWas = new Dictionary<Behaviour, bool>();
             /// <summary>
             /// Every body under the root as it was when we started watching:
             /// where it sat, whether it was kinematic. Put back exactly on
@@ -373,6 +375,16 @@ namespace TcgMultiplayer.Game
 
         private const string OursPrefix = "TCGMP_Stand_";
 
+        /// <summary>
+        /// "Machine HANDS-Joystick": the first-person hands a cabinet shows on
+        /// the PLAYER's arms. They belong to whoever is at the machine on each
+        /// side, never to the stream.
+        /// </summary>
+        public static bool IsPlayersHands(string name)
+        {
+            return !string.IsNullOrEmpty(name) && name.StartsWith("Machine HANDS", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static void WalkChildren(Transform parent, string prefix, List<Rigidbody> into, List<string> keys)
         {
             Dictionary<string, int> seen = null;
@@ -381,7 +393,7 @@ namespace TcgMultiplayer.Game
             for (int i = 0; i < parent.childCount; i++)
             {
                 var t = parent.GetChild(i);
-                if (IsOwnersCard(t.name) || IsOurs(t.name)) continue;
+                if (IsOwnersCard(t.name) || IsOurs(t.name) || IsPlayersHands(t.name)) continue;
                 string key = null;
                 if (keys != null)
                 {
@@ -518,7 +530,7 @@ namespace TcgMultiplayer.Game
             // few seconds regardless so a watcher who missed one, or who walked
             // up late, gets a fresh one soon.
             bool newMachine = _lastSentMachine != m.Id;
-            Gather(m.Root, _bodies, null);
+            Gather(m.Play, _bodies, null);
             if (_bodies.Count == 0) return null;
 
             bool changed = newMachine || _bodies.Count != _lastSentBodies.Count;
@@ -536,7 +548,7 @@ namespace TcgMultiplayer.Game
             if (keyframe) _nextKeyframeAt = now + ManifestKeyframeEvery;
             if (manifest)
             {
-                Gather(m.Root, _bodies, _keys);
+                Gather(m.Play, _bodies, _keys);
                 _lastSentBodies.Clear();
                 _lastSentBodies.AddRange(_bodies);
                 ManifestsSent++;
@@ -556,7 +568,7 @@ namespace TcgMultiplayer.Game
                 _nextKeyframeAt = 0f;   // and get a full set straight away
                 keyframe = true;
                 manifest = true;
-                if (_keys.Count != _bodies.Count) Gather(m.Root, _bodies, _keys);
+                if (_keys.Count != _bodies.Count) Gather(m.Play, _bodies, _keys);
                 if (_describedOwner.Add(m.Id)) DescribeRoot(m, _bodies, "Owner");
             }
 
@@ -764,7 +776,7 @@ namespace TcgMultiplayer.Game
             // triggering the machine's collectors, and kept the watcher's copy
             // of the round running underneath the one it was being shown. A
             // body we cannot place is better still than moving on its own.
-            Gather(m.Root, _scratch, manifest ? _scratchKeys : null);
+            Gather(m.Play, _scratch, manifest ? _scratchKeys : null);
 
             // A body leaving OUR walk while we spectate is a fault: nothing
             // of ours should be running the machine. On the claw, the
@@ -773,7 +785,7 @@ namespace TcgMultiplayer.Game
             // which key went and where the object is now.
             if (w.LastLocalCount >= 0 && _scratch.Count < w.LastLocalCount && w.DepartureLogs < 6)
             {
-                if (!manifest) Gather(m.Root, _scratch, _scratchKeys);
+                if (!manifest) Gather(m.Play, _scratch, _scratchKeys);
                 var present = new HashSet<string>(_scratchKeys);
                 foreach (var kv in w.LastLocalByKey)
                 {
@@ -794,7 +806,7 @@ namespace TcgMultiplayer.Game
             }
             if (manifest || w.LastLocalCount != _scratch.Count)
             {
-                if (_scratchKeys.Count != _scratch.Count) Gather(m.Root, _scratch, _scratchKeys);
+                if (_scratchKeys.Count != _scratch.Count) Gather(m.Play, _scratch, _scratchKeys);
                 w.LastLocalByKey.Clear();
                 for (int i = 0; i < _scratch.Count; i++)
                     if (!w.LastLocalByKey.ContainsKey(_scratchKeys[i])) w.LastLocalByKey[_scratchKeys[i]] = _scratch[i];
@@ -1018,7 +1030,7 @@ namespace TcgMultiplayer.Game
 
                 bool wasDrawing = rb.gameObject.activeInHierarchy;
                 var t = rb.transform.parent;
-                while (t != null && t != m.Root)
+                while (t != null && t != m.Play)
                 {
                     if (!t.gameObject.activeSelf) SetActiveRemembering(w, t.gameObject, true);
                     t = t.parent;
@@ -1207,7 +1219,7 @@ namespace TcgMultiplayer.Game
                 var rb = bodies[i];
                 if (rb == null) continue;
                 var t = rb.transform.parent;
-                while (t != null && t != m.Root)
+                while (t != null && t != m.Play)
                 {
                     if (named.Add(t) && t.GetComponent<Rigidbody>() == null)
                     {
@@ -1470,6 +1482,7 @@ namespace TcgMultiplayer.Game
             // Everything we switched on or off goes back exactly as it was.
             foreach (var kv in w.Originals)
                 if (kv.Key != null) kv.Key.SetActive(kv.Value);
+            Quiet.Restore(w.FsmWas);
 
             for (int i = 0; i < w.CollidersOff.Count; i++)
                 if (w.CollidersOff[i] != null) w.CollidersOff[i].enabled = true;
@@ -1509,7 +1522,8 @@ namespace TcgMultiplayer.Game
         {
             if (go == null || go.activeSelf == on) return;
             if (!w.Originals.ContainsKey(go)) w.Originals[go] = go.activeSelf;
-            go.SetActive(on);
+            if (on) Quiet.Activate(go, w.FsmWas);
+            else go.SetActive(false);
         }
 
         public void ReleaseAll()

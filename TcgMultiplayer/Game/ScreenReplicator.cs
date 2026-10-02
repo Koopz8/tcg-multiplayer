@@ -92,6 +92,8 @@ namespace TcgMultiplayer.Game
             public Dictionary<string, Transform> AllByKey;
             public readonly Dictionary<Transform, Quaternion> OriginalRot = new Dictionary<Transform, Quaternion>();
             public int MoverMisses;
+            public readonly Dictionary<Behaviour, bool> FsmWas = new Dictionary<Behaviour, bool>();
+            public readonly Dictionary<Component, bool> Sim2DWas = new Dictionary<Component, bool>();
         }
         private sealed class Ease
         {
@@ -203,7 +205,7 @@ namespace TcgMultiplayer.Game
                 _mineMachine = m.Id;
                 _nextRescanAt = now + KeyframeEvery;
                 var before = _mine.Count;
-                Gather(m.Root, _mine);
+                Gather(m.Play, _mine);
                 FieldsFound = _mine.Count;
                 _mineChains.Clear();
                 for (int i = 0; i < _mine.Count; i++)
@@ -336,7 +338,7 @@ namespace TcgMultiplayer.Game
             {
                 w.RescanAt = now + KeyframeEvery;
                 var found = new List<Field>();
-                Gather(m.Root, found);
+                Gather(m.Play, found);
                 for (int i = 0; i < found.Count; i++)
                     if (!w.ByKey.ContainsKey(found[i].Key)) w.ByKey[found[i].Key] = found[i];
                 if (!w.Described)
@@ -429,7 +431,7 @@ namespace TcgMultiplayer.Game
                 Transform tr;
                 if (key != null)
                 {
-                    if (w.AllByKey == null) w.AllByKey = IndexAll(m.Root);
+                    if (w.AllByKey == null) w.AllByKey = IndexAll(m.Play);
                     if (!w.AllByKey.TryGetValue(key, out tr) || tr == null)
                     {
                         w.MoverIds.Remove(id);
@@ -448,11 +450,14 @@ namespace TcgMultiplayer.Game
                 if (on)
                 {
                     var a = tr.parent;
-                    while (a != null && a != m.Root) { if (!a.gameObject.activeSelf) SetActiveRemembering(w, a.gameObject, true); a = a.parent; }
+                    while (a != null && a != m.Play) { if (!a.gameObject.activeSelf) SetActiveRemembering(w, a.gameObject, true); a = a.parent; }
                 }
 
                 if (!w.OriginalPos.ContainsKey(tr)) w.OriginalPos[tr] = tr.localPosition;
                 if (!w.OriginalRot.ContainsKey(tr)) w.OriginalRot[tr] = tr.localRotation;
+                // A 2D body (Speed Drop's balls) would keep falling under our
+                // hand and snap back every physics step.
+                Quiet.Hold2D(tr, w.Sim2DWas);
 
                 float mag = Mathf.Sqrt(rot.x * rot.x + rot.y * rot.y + rot.z * rot.z + rot.w * rot.w);
                 if (mag > 0.0001f) rot = new Quaternion(rot.x / mag, rot.y / mag, rot.z / mag, rot.w / mag);
@@ -499,7 +504,8 @@ namespace TcgMultiplayer.Game
         {
             if (go == null || go.activeSelf == on) return;
             if (!w.OriginalActive.ContainsKey(go)) w.OriginalActive[go] = go.activeSelf;
-            go.SetActive(on);
+            if (on) Quiet.Activate(go, w.FsmWas);
+            else go.SetActive(false);
         }
 
         /// <summary>
@@ -544,6 +550,8 @@ namespace TcgMultiplayer.Game
                 if (kv.Key.Comp != null) WriteText(kv.Key, kv.Value);
             foreach (var kv in w.OriginalActive)
                 if (kv.Key != null) kv.Key.SetActive(kv.Value);
+            Quiet.Restore(w.FsmWas);
+            Quiet.Restore2D(w.Sim2DWas);
             foreach (var kv in w.OriginalRot)
                 if (kv.Key != null) kv.Key.localRotation = kv.Value;
             foreach (var kv in w.OriginalPos)
