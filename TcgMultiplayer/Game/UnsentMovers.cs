@@ -332,6 +332,20 @@ namespace TcgMultiplayer.Game
             var sb = new System.Text.StringBuilder();
             for (int i = 0; i < tops.Count && i < 10; i++)
                 sb.Append("  ").Append(tops[i].Key).Append(" (").Append(tops[i].Moves).Append(")");
+            // Where they were, roughly: live parts grouped by the first three
+            // steps of their path. A cabinet that "shows nothing" with twenty
+            // parts sent needs to say which twenty.
+            var groups = new Dictionary<string, int>();
+            for (int i = 0; i < _live.Count; i++)
+            {
+                var k = _live[i].Key ?? "";
+                var segs = k.Split('/');
+                string g = string.Join("/", segs, 0, Math.Min(3, segs.Length));
+                int c; groups.TryGetValue(g, out c); groups[g] = c + 1;
+            }
+            var gl = new List<KeyValuePair<string, int>>(groups);
+            gl.Sort((a, b) => b.Value.CompareTo(a.Value));
+            for (int i = 0; i < gl.Count && i < 6; i++) sb.Append("  [").Append(gl[i].Key).Append(" x").Append(gl[i].Value).Append("]");
             Plugin.Log("Movers on " + _label + ": " + _live.Count + " parts that aren't bodies or screen moved and were sent"
                        + (_live.Count >= MaxLive ? " (hit the cap of " + MaxLive + ")" : "") + "." + sb);
             Count += _live.Count;

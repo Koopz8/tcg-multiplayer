@@ -30,7 +30,9 @@ namespace TcgMultiplayer.Game
                 for (int i = 0; i < fsms.Length; i++)
                 {
                     var f = fsms[i];
-                    if (f == null || !f.enabled) continue;
+                    if (f == null) continue;
+                    if (_pending.Remove(f)) { if (!fsmWas.ContainsKey(f)) fsmWas[f] = true; continue; }
+                    if (!f.enabled) continue;
                     if (!fsmWas.ContainsKey(f)) fsmWas[f] = true;
                     f.enabled = false;
                     FsmsSilenced++;
@@ -41,12 +43,51 @@ namespace TcgMultiplayer.Game
         }
 
         /// <summary>After the objects are back as they were — enabling an FSM on a switched-off object runs nothing.</summary>
+        /// <summary>
+        /// Never switch an FSM back on while its object is still on. Physics
+        /// and the screen mirror each switch things on and each put them back,
+        /// one after the other — and skee ball's round controller, still on
+        /// because the screen hadn't let go of it yet, got its FSM re-enabled by
+        /// physics letting go first. It started up on the watcher: the power
+        /// gauge appeared and the arm locked toward the card reader. So an FSM
+        /// whose object is still on waits, and is put back the moment its
+        /// object goes off (or now, if it stays off).
+        /// </summary>
         public static void Restore(Dictionary<Behaviour, bool> fsmWas)
         {
             foreach (var kv in fsmWas)
-                if (kv.Key != null) { try { kv.Key.enabled = kv.Value; } catch { } }
+            {
+                var b = kv.Key;
+                if (b == null) continue;
+                if (b.gameObject.activeInHierarchy && kv.Value) { _pending.Add(b); continue; }
+                try { b.enabled = kv.Value; } catch { }
+            }
             fsmWas.Clear();
         }
+
+        private static readonly List<Behaviour> _pending = new List<Behaviour>();
+        private static float _pendingAt;
+        public static int PendingFsms { get { return _pending.Count; } }
+
+        /// <summary>Every frame or so: put back any waiting FSM whose object has gone off.</summary>
+        public static void Tick()
+        {
+            if (_pending.Count == 0) return;
+            float now = Time.time;
+            if (now < _pendingAt) return;
+            _pendingAt = now + 0.25f;
+            for (int i = _pending.Count - 1; i >= 0; i--)
+            {
+                var b = _pending[i];
+                if (b == null) { _pending.RemoveAt(i); continue; }
+                if (b.gameObject.activeInHierarchy) continue;
+                try { b.enabled = true; } catch { }
+                _pending.RemoveAt(i);
+            }
+        }
+
+        /// <summary>If we switch something on again for a new lease, it's ours again, not pending.</summary>
+        public static void Forget(Behaviour b) { _pending.Remove(b); }
 
         // ------------------------------------------------ 2D physics, by name
         // Speed Drop's balls are Rigidbody2D, and the 2D physics module isn't

@@ -189,6 +189,11 @@ namespace TcgMultiplayer.Game
             /// </summary>
             public readonly Dictionary<Rigidbody, Vector3> Wrote = new Dictionary<Rigidbody, Vector3>(512);
             public int Overridden, Writes, LateFixes;
+            public readonly List<int> Order = new List<int>(128);
+            public int OrderFor = -1;
+            public bool OrderStale = true;
+            /// <summary>Which of our bodies each by-name key got last time, so pucks don't swap every manifest.</summary>
+            public readonly Dictionary<string, Rigidbody> Sticky = new Dictionary<string, Rigidbody>();
             /// <summary>Running average of the time between pose packets.</summary>
             public float Gap = 0.05f, LastPacketAt = -1f;
             public string OverriddenExample;
@@ -420,6 +425,8 @@ namespace TcgMultiplayer.Game
         private uint _nearMachine;
         private int _nearLayerTicket = -2;
         public int NearBodies;
+        /// <summary>Set by the director: is this transform inside a different machine's cabinet?</summary>
+        public Func<Machine, Transform, bool> UnderOtherCabinet;
 
         private void RefreshNear(Machine m)
         {
@@ -442,6 +449,9 @@ namespace TcgMultiplayer.Game
                     var t = rb.transform;
                     if (!rb.name.EndsWith("(Clone)", StringComparison.Ordinal)) continue;
                     if (t.IsChildOf(m.Play)) continue;
+                    // Another cabinet's own things (Stackem Up's prizes sit a
+                    // metre from Speed Drop) are that cabinet's business.
+                    if (UnderOtherCabinet != null && UnderOtherCabinet(m, t)) continue;
                     if (rb.gameObject.layer == _nearLayerTicket) continue;
                     if ((t.position - centre).sqrMagnitude > NearRadius * NearRadius) continue;
                     var top = t.root;
@@ -457,6 +467,32 @@ namespace TcgMultiplayer.Game
             for (int i = 0; i < _near.Count; i++) if (_near[i] != null && set.Contains(_near[i])) next.Add(_near[i]);
             var had = new HashSet<Rigidbody>(next);
             for (int i = 0; i < keep.Count; i++) if (!had.Contains(keep[i])) next.Add(keep[i]);
+            if (_censusSaid.Add(m.Id))
+            {
+                // Once per machine: every body within reach that ISN'T being
+                // sent, and why, so a cabinet whose pieces live somewhere odd
+                // can be found from one round's log.
+                try
+                {
+                    var all = UnityEngine.Object.FindObjectsOfType<Rigidbody>();
+                    var centre = m.Root.position;
+                    var sb = new System.Text.StringBuilder();
+                    int n = 0;
+                    for (int i = 0; i < all.Length && n < 12; i++)
+                    {
+                        var rb = all[i];
+                        if (rb == null) continue;
+                        var t = rb.transform;
+                        if (t.IsChildOf(m.Play)) continue;
+                        if ((t.position - centre).sqrMagnitude > NearRadius * NearRadius) continue;
+                        n++;
+                        sb.Append("  ").Append(rb.name).Append(" under ").Append(t.parent != null ? t.parent.name : "the scene")
+                          .Append(rb.name.EndsWith("(Clone)", StringComparison.Ordinal) ? "" : " (not spawned)");
+                    }
+                    if (n > 0) Plugin.Log("Bodies near " + m.Label + " that aren't part of it:" + sb);
+                }
+                catch { }
+            }
             if (next.Count > 0 && _near.Count == 0 && _nearSaid.Add(m.Id))
                 Plugin.Log("Spawned nearby " + m.Label + " and not under it: " + next.Count + " bodies (e.g. " + next[0].name
                            + " under " + (next[0].transform.parent != null ? next[0].transform.parent.name : "the scene") + ") - sending those too.");
@@ -465,6 +501,7 @@ namespace TcgMultiplayer.Game
             NearBodies = _near.Count;
         }
         private readonly HashSet<uint> _nearSaid = new HashSet<uint>();
+        private readonly HashSet<uint> _censusSaid = new HashSet<uint>();
 
         /// <summary>
         /// "Machine HANDS-Joystick": the first-person hands a cabinet shows on
@@ -1026,7 +1063,7 @@ namespace TcgMultiplayer.Game
 
                     Rigidbody rb;
                     if (_byKey.TryGetValue(key, out rb)) { w.Aligned.Add(rb); matched++; _claimed.Add(rb); }
-                    else if ((rb = ByLeafName(key)) != null)
+                    else if ((rb = ByLeafName(w, key)) != null)
                     {
                         // Same object, different parent. Hockey Hut's pucks
                         // start under the table and are moved to PUCKS/ as
@@ -1074,6 +1111,7 @@ namespace TcgMultiplayer.Game
                 }
 
                 w.HaveManifest = true;
+                w.OrderStale = true;
                 w.Matched = matched;
                 w.Stood = stood;
                 if (Report != null) Report.Bodies(m.Id, m.Label, _scratch.Count, count, matched, stood);
@@ -1277,8 +1315,11 @@ namespace TcgMultiplayer.Game
             foreach (var kv in _watched)
             {
                 var w = kv.Value;
-                for (int i = 0; i < w.Aligned.Count && i < w.Targets.Count; i++)
+                EnsureOrder(w);
+                for (int oi = 0; oi < w.Order.Count; oi++)
                 {
+                    int i = w.Order[oi];
+                    if (i >= w.Aligned.Count || i >= w.Targets.Count) continue;
                     var rb = w.Aligned[i];
                     if (rb == null) continue;
                     var t = w.Targets[i];
@@ -1370,14 +1411,42 @@ namespace TcgMultiplayer.Game
         /// after we placed it", 20-odd times every five seconds, always the
         /// shovel. Putting the pose back here means what's drawn is ours.
         /// </summary>
+        /// <summary>
+        /// Parents before children. Hockey Hut's table is a body and its pucks
+        /// sit on it as bodies too, and they were written in the owner's walk
+        /// order, pucks first: each frame the pucks were put right and then the
+        /// table turned and carried them off again, so on a spinning table they
+        /// flicked back and forth every frame.
+        /// </summary>
+        private static void EnsureOrder(Watched w)
+        {
+            if (w.Order.Count == w.Aligned.Count && w.OrderFor == w.Aligned.Count && !w.OrderStale) return;
+            w.Order.Clear();
+            var depth = new List<KeyValuePair<int, int>>(w.Aligned.Count);
+            for (int i = 0; i < w.Aligned.Count; i++)
+            {
+                int d = 0;
+                var rb = w.Aligned[i];
+                if (rb != null) { var t = rb.transform; while (t != null) { d++; t = t.parent; } }
+                depth.Add(new KeyValuePair<int, int>(i, d));
+            }
+            depth.Sort((a, b) => a.Value != b.Value ? a.Value.CompareTo(b.Value) : a.Key.CompareTo(b.Key));
+            for (int i = 0; i < depth.Count; i++) w.Order.Add(depth[i].Key);
+            w.OrderFor = w.Aligned.Count;
+            w.OrderStale = false;
+        }
+
         public void LateRender()
         {
             if (_watched.Count == 0) return;
             foreach (var kv in _watched)
             {
                 var w = kv.Value;
-                for (int i = 0; i < w.Aligned.Count && i < w.Targets.Count; i++)
+                EnsureOrder(w);
+                for (int oi = 0; oi < w.Order.Count; oi++)
                 {
+                    int i = w.Order[oi];
+                    if (i >= w.Aligned.Count || i >= w.Targets.Count) continue;
                     var rb = w.Aligned[i];
                     if (rb == null) continue;
                     var t = w.Targets[i];
@@ -1525,8 +1594,19 @@ namespace TcgMultiplayer.Game
         /// cabinet. Only bodies that no key claimed outright are offered, and
         /// each once per manifest, in walk order.
         /// </summary>
-        private Rigidbody ByLeafName(string key)
+        private Rigidbody ByLeafName(Watched w, string key)
         {
+            Rigidbody sticky;
+            if (w.Sticky.TryGetValue(key, out sticky) && sticky != null && !_claimed.Contains(sticky)
+                && sticky.name == LeafOf(key) && _scratch.Contains(sticky))
+            {
+                string sk = KeyOfLocal(sticky);
+                if (sk == null || _ownerKeys == null || !_ownerKeys.Contains(sk))
+                {
+                    _claimed.Add(sticky);
+                    return sticky;
+                }
+            }
             if (_leafPool == null)
             {
                 // Built after every exact match has been tried would be ideal;
@@ -1553,6 +1633,7 @@ namespace TcgMultiplayer.Game
                 string itsKey = KeyOfLocal(rb);
                 if (itsKey != null && _ownerKeys != null && _ownerKeys.Contains(itsKey)) continue;
                 _claimed.Add(rb);
+                w.Sticky[key] = rb;
                 return rb;
             }
             return null;

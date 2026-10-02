@@ -100,6 +100,12 @@ namespace TcgMultiplayer.Game
             Physics.Report = Watch;
             Screen.Report = Watch;
             Screen.Movers = Unsent;
+            Physics.UnderOtherCabinet = (mine, t) =>
+            {
+                foreach (var o in _registry.All)
+                    if (o != null && o.Id != mine.Id && o.Play != null && t.IsChildOf(o.Play)) return true;
+                return false;
+            };
             _session.OnMachinePhysics += OnPhysics;
             _session.OnMachineScreen += OnScreen;
             _session.OnLooseItem += (from, payload) => Items.Receive(from.m_SteamID, payload);
@@ -1485,6 +1491,7 @@ namespace TcgMultiplayer.Game
         {
             Screen.LateRender();
             Physics.LateRender();
+            Quiet.Tick();
         }
 
         private void OnScreen(CSteamID from, uint machineId, byte[] payload)
